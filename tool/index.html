@@ -1,0 +1,1456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Shortlist — studio job matcher</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2314161a'/%3E%3Cpath d='M9 17l4.5 4.5L23 11' stroke='%23c6f36b' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&display=swap" rel="stylesheet">
+<script>
+  const _w = console.warn; console.warn = (...a) => { if (typeof a[0] === 'string' && a[0].includes('cdn.tailwindcss.com')) return; _w.apply(console, a); };
+</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], serif: ['"Instrument Serif"', 'Georgia', 'serif'] },
+  colors: { ink: '#14161a', paper: '#f6f5f1', line: '#e6e3dc', lime: { DEFAULT: '#c6f36b' } } } } };
+</script>
+<style>
+  body { background: #f6f5f1; color: #14161a; -webkit-font-smoothing: antialiased; }
+  .scroll-thin::-webkit-scrollbar { width: 8px; height: 8px } .scroll-thin::-webkit-scrollbar-thumb { background: #d6d3cb; border-radius: 8px }
+  .paper { box-shadow: 0 1px 2px rgba(20,22,26,.06), 0 8px 28px rgba(20,22,26,.07); }
+  .fade-in { animation: fi .18s ease-out } @keyframes fi { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+  .drawer { animation: dr .22s cubic-bezier(.2,.8,.2,1) } @keyframes dr { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
+  textarea { resize: vertical }
+  @media (prefers-reduced-motion: reduce) { .fade-in, .drawer { animation: none } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="application/json" id="seed">null</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback } = React;
+
+/* ══════════════════════════════════════════════════════════════════
+   SETTINGS
+   ══════════════════════════════════════════════════════════════════ */
+// Inside Gemini (Canvas / shared apps) the empty ?key= is filled in by Gemini itself — no API key or credits needed.
+const MODELS = ['gemini-3-flash-preview', 'gemini-2.5-flash-preview-09-2025', 'gemini-2.5-flash'];
+const SEARCH_TERMS = ['design', 'UX', 'creative technologist'];
+// Big studios with their own career sites…
+const STUDIOS = { amazon: 'Amazon', netflix: 'Netflix', apple: 'Apple', disney: 'Disney', wbd: 'Warner Bros. Discovery', nbcu: 'NBCUniversal', paramount: 'Paramount',
+// …and big tech / entertainment companies whose public job boards (Greenhouse, Lever) work straight from the browser
+  sony: 'Sony PlayStation', riot: 'Riot Games', spotify: 'Spotify', discord: 'Discord', roblox: 'Roblox', reddit: 'Reddit', pinterest: 'Pinterest', airbnb: 'Airbnb', figma: 'Figma', duolingo: 'Duolingo', epic: 'Epic Games' };
+const BOARDS = { sony: ['greenhouse', 'sonyinteractiveentertainmentglobal'], riot: ['greenhouse', 'riotgames'], discord: ['greenhouse', 'discord'], roblox: ['greenhouse', 'roblox'], reddit: ['greenhouse', 'reddit'],
+  pinterest: ['greenhouse', 'pinterest'], airbnb: ['greenhouse', 'airbnb'], figma: ['greenhouse', 'figma'], duolingo: ['greenhouse', 'duolingo'], epic: ['greenhouse', 'epicgames'], spotify: ['lever', 'spotify'] };
+const SHORT = { ...STUDIOS, wbd: 'WBD', nbcu: 'NBCU', sony: 'PlayStation', manual: 'Added by you', web: 'Web search' };
+const STORE_KEY = 'shortlist_canvas_v1';
+
+const DEFAULT_PREFS = {
+  min_score: 70,
+  include: 'designer\nux\nui\nuser experience\nproduct design\ndesign technologist\ncreative technologist\nprototyp\ndesign system\ninteraction design\nvisual design\nmotion design\ncreative director\ncontent design\nhead of design\ndesign lead\ndesign manager',
+  exclude: 'intern\ninternship\nindustrial design\nfashion\napparel\ninterior\ncostume\nset designer\nproduction designer\nlighting design\nsound design\nscenic\nhardware\nmechanical\nchip\nsilicon\nanalog\nrf design\nasic\ncircuit\nlandscape\ngame designer\nlevel designer\ninstructional designer\nenvironment designer\ncharacter designer\nbackground designer\nprop designer\nanimation\nstoryboard\nvisual development\ntoy\ntextile\njewelry\nfootwear\nretail designer\nexhibit\ntheatrical\nshow designer\nride',
+  locations: 'los angeles\nburbank\nglendale\nsanta monica\nculver city\nuniversal city\nnorth hollywood\nhollywood\nwest hollywood\nplaya vista\nel segundo\nremote',
+  allow_remote: true,
+  sources: { amazon: true, netflix: true, apple: true, disney: true, wbd: true, nbcu: true, paramount: true, sony: true, riot: true, spotify: true, discord: true, roblox: true, reddit: true, pinterest: true, airbnb: true, figma: true, duolingo: true, epic: true },
+  contact: { name: '', email: '', phone: '', city: 'Los Angeles, CA', links: '' },
+  tone: 'Warm, direct, specific. No clichés, no "I am writing to express my interest".',
+  checks_per_search: 15,
+  anchors: '',
+  voice_sample: '',
+  home_area: '',
+  api_key: '',
+};
+
+/* ══════════════════════════════════════════════════════════════════
+   STORAGE (this browser only — use Backup to move it)
+   ══════════════════════════════════════════════════════════════════ */
+const emptyDB = () => ({ prefs: JSON.parse(JSON.stringify(DEFAULT_PREFS)), vault: '', extra: '', struct: null, jobs: {}, matches: {}, runs: [], sources: {}, lastCollect: null, aiCalls: {} });
+// Your resume and facts can be built into this file (the <script id="seed"> tag), so a brand-new copy starts ready.
+const SEED = (() => { try { const el = document.getElementById('seed'); return el ? JSON.parse(el.textContent || 'null') : null; } catch (e) { return null; } })();
+function seededDB() {
+  const d = emptyDB();
+  if (SEED) { d.vault = SEED.vault || ''; d.extra = SEED.extra || ''; Object.assign(d.prefs.contact, SEED.contact || {}); ['anchors', 'voice_sample', 'home_area'].forEach(k => { if (SEED[k]) d.prefs[k] = SEED[k]; }); }
+  return d;
+}
+let DB = (() => {
+  try { const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); if (s) { s.prefs = { ...DEFAULT_PREFS, ...s.prefs, contact: { ...DEFAULT_PREFS.contact, ...(s.prefs || {}).contact }, sources: { ...DEFAULT_PREFS.sources, ...(s.prefs || {}).sources } };
+    const d = { ...emptyDB(), ...s }; if (!d.vault.trim() && SEED && SEED.vault) { d.vault = SEED.vault; if (!d.extra.trim()) d.extra = SEED.extra || ''; } return d; } } catch (e) {}
+  return seededDB();
+})();
+const listeners = new Set();
+let saveTimer;
+function commit() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); }
+    catch (e) { // storage full: drop descriptions of closed or hidden jobs and retry
+      for (const [id, j] of Object.entries(DB.jobs)) { const m = DB.matches[id] || {}; if (!j.active || m.status === 'hidden') j.description = ''; }
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e2) { console.error('Could not save', e2); }
+    }
+  }, 300);
+  listeners.forEach(f => f());
+}
+function useDB() { const [, set] = useState(0); useEffect(() => { const f = () => set(x => x + 1); listeners.add(f); return () => listeners.delete(f); }, []); return DB; }
+
+/* ══════════════════════════════════════════════════════════════════
+   HELPERS
+   ══════════════════════════════════════════════════════════════════ */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const today = () => new Date().toISOString().slice(0, 10);
+const nowStr = () => new Date().toISOString();
+const lines = (s) => String(s || '').split(/\r?\n/).map(l => l.trim().toLowerCase()).filter(Boolean);
+const hashId = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36) + s.length.toString(36); };
+const jobId = (src, ext) => src + '_' + hashId(src + ':' + ext);
+const decodeEntities = (s) => { const t = document.createElement('textarea'); t.innerHTML = s; return t.value; };
+function htmlToText(html) {
+  if (!html) return '';
+  let h = String(html).replace(/<(br|\/p|\/li|\/h\d|\/div|\/tr)\b[^>]*>/gi, '\n').replace(/<li\b[^>]*>/gi, '\n• ');
+  h = decodeEntities(h.replace(/<[^>]+>/g, ' '));
+  return h.replace(/[ \t ]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').replace(/^ +| +$/gm, '').trim();
+}
+const normText = (s) => String(s || '').replace(/[–—‑]/g, '-').replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/•/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const payRe = /\$\s?[\d,]{5,}(?:\.\d+)?\s*(?:and|-|–|to)\s*\$?\s?[\d,]{5,}(?:\.\d+)?|\$\s?\d{2,3}(?:\.\d+)?\s*(?:-|–|to)\s*\$?\s?\d{2,3}(?:\.\d+)?\s*(?:per hour|\/hr|\/hour|an hour)/i;
+const findPay = (t) => { const m = String(t || '').match(payRe); return m ? m[0] : ''; };
+function ago(d) {
+  if (!d) return ''; const t = new Date(d); const days = Math.floor((Date.now() - t) / 864e5);
+  if (isNaN(days)) return ''; if (days <= 0) return 'today'; if (days === 1) return 'yesterday'; if (days < 30) return days + ' days ago';
+  return t.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   NETWORK — the browser can't read career sites directly (CORS), so it
+   tries the site first, then public readers, like Content Studio does.
+   ══════════════════════════════════════════════════════════════════ */
+const RUN = { ctl: new AbortController() };
+const stopped = () => RUN.ctl.signal.aborted;
+function stopEverything() { RUN.ctl.abort(); }
+async function fetchTimeout(url, opts = {}, ms = 15000) {
+  if (stopped()) throw Object.assign(new Error('Stopped'), { name: 'StopError' });
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), ms);
+  const onStop = () => ctl.abort(); RUN.ctl.signal.addEventListener('abort', onStop);
+  try { return await fetch(url, { ...opts, signal: ctl.signal }); }
+  catch (e) { if (stopped()) throw Object.assign(new Error('Stopped'), { name: 'StopError' }); throw e; }
+  finally { clearTimeout(t); RUN.ctl.signal.removeEventListener('abort', onStop); }
+}
+// Free public readers that let a web page read another site. Content Studio uses the same idea.
+// Order is learned per site: the route that worked last time goes first, routes that failed are skipped for a while.
+const ROUTES = {
+  direct: (u) => u,
+  allorigins: (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+  codetabs: (u) => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u),
+  corsproxy: (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u),
+};
+const routeMem = () => (DB.routes = DB.routes || {});
+function routeOrder(host) {
+  const mem = routeMem()[host] || {}; const now = Date.now();
+  const names = Object.keys(ROUTES).filter(n => !(mem.bad && mem.bad[n] && now - mem.bad[n] < 6 * 3600e3));
+  if (mem.good && names.includes(mem.good)) { names.splice(names.indexOf(mem.good), 1); names.unshift(mem.good); }
+  return names.length ? names : Object.keys(ROUTES);
+}
+function routeResult(host, name, ok) {
+  const m = routeMem(); const r = m[host] = m[host] || { bad: {} }; r.bad = r.bad || {};
+  if (ok) { r.good = name; delete r.bad[name]; } else { r.bad[name] = Date.now(); if (r.good === name) delete r.good; }
+}
+async function jina(url, html) {
+  const r = await fetchTimeout('https://r.jina.ai/' + url, { headers: html ? { 'X-Return-Format': 'html' } : { Accept: 'text/plain' } }, 30000);
+  if (!r.ok) throw new Error('reader HTTP ' + r.status);
+  return await r.text();
+}
+// Fetches a page as text. `valid` decides whether an answer is usable (a reader can return an error page).
+async function getText(url, valid = (t) => !!(t && t.trim()), opts = {}) {
+  const host = new URL(url).host; let lastErr = '';
+  for (const name of routeOrder(host)) {
+    try {
+      const r = await fetchTimeout(ROUTES[name](url), { headers: { Accept: opts.json ? 'application/json' : 'text/html,application/json;q=0.9' } });
+      if (!r.ok) { lastErr = 'HTTP ' + r.status; routeResult(host, name, false); continue; }
+      const t = await r.text();
+      if (valid(t)) { routeResult(host, name, true); return t; }
+      lastErr = 'unexpected answer'; routeResult(host, name, false);
+    } catch (e) { if (e.name === 'StopError') throw e; lastErr = e.name === 'AbortError' ? 'timed out' : 'blocked'; routeResult(host, name, false); }
+  }
+  if (opts.reader !== false) { try { const t = await jina(url, !opts.json); if (valid(t)) return t; } catch (e) { lastErr = e.message; } }
+  throw new Error(host + ' could not be reached (' + lastErr + ')');
+}
+const parseLooseJSON = (t) => { try { return JSON.parse(t); } catch (e) {} if (/^\s*\[/.test(t)) return null; const a = t.indexOf('{'), b = t.lastIndexOf('}'); if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (e) {} } return null; };
+async function getJSON(url) { return parseLooseJSON(await getText(url, (t) => !!parseLooseJSON(t || ''), { json: true })); }
+async function postJSON(url, body) {
+  // only the paid corsproxy forwards POSTs now, so try quickly and let callers fall back to GET sources
+  let lastErr = '';
+  for (const p of [(u) => u, (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u)]) {
+    try {
+      const r = await fetchTimeout(p(url), { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) }, 10000);
+      if (!r.ok) { lastErr = 'HTTP ' + r.status; continue; }
+      return await r.json();
+    } catch (e) { lastErr = e.name === 'AbortError' ? 'timed out' : 'blocked'; }
+  }
+  throw new Error(new URL(url).host + ' could not be reached (' + lastErr + ')');
+}
+// Pulls a JSON array out of a page, e.g. "positions": [ ... ] embedded in HTML.
+function extractArray(text, key) {
+  const i = text.indexOf('"' + key + '"'); if (i < 0) return null;
+  const start = text.indexOf('[', i); if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let k = start; k < text.length; k++) {
+    const c = text[k];
+    if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true; else if (c === '[') depth++; else if (c === ']') { depth--; if (depth === 0) { try { return JSON.parse(text.slice(start, k + 1)); } catch (e) { return null; } } }
+  }
+  return null;
+}
+// Reads one job page: JSON-LD JobPosting first (most career sites include it), then the page text.
+async function readJobPage(url, selectors = '') {
+  const html = await getText(url, (t) => !!t && t.length > 500);
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const sc of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      let d = JSON.parse(sc.textContent); d = Array.isArray(d) ? d : (d['@graph'] || [d]);
+      const jp = d.find(x => x && (x['@type'] === 'JobPosting' || (Array.isArray(x['@type']) && x['@type'].includes('JobPosting'))));
+      if (jp) {
+        const loc = [].concat(jp.jobLocation || []).map(l => { const a = (l && l.address) || {}; return [a.addressLocality, a.addressRegion].filter(Boolean).join(', '); }).filter(Boolean).join(' / ');
+        const desc = htmlToText(decodeEntities(String(jp.description || '')));
+        if (desc.length > 200) return { title: jp.title, description: desc, posted_at: jp.datePosted ? String(jp.datePosted).slice(0, 10) : null, location: loc };
+      }
+    } catch (e) {}
+  }
+  // some career sites (Netflix) keep the description in embedded data
+  const jd = html.match(/"job_description"\s*:\s*("(?:[^"\\]|\\.)*")/);
+  if (jd) { try { const t = htmlToText(JSON.parse(jd[1])); if (t.length > 200) return { description: t.slice(0, 15000) }; } catch (e) {} }
+  const el = selectors && doc.querySelector(selectors);
+  let text = htmlToText(el ? el.innerHTML : (doc.querySelector('main') || doc.body || doc.documentElement).innerHTML);
+  if (text.length < 300) { try { const t = await jina(url, false); const i = t.indexOf('Markdown Content:'); text = (i >= 0 ? t.slice(i + 17) : t).trim(); } catch (e) {} }
+  return { description: text.slice(0, 15000) };
+}
+// Finds job links in HTML or reader markdown: returns [{href, title}]
+function findLinks(text, re) {
+  const out = []; const seen = new Set(); let m;
+  const md = /\[([^\]]{3,200})\]\((https?:[^)\s]+)\)/g;
+  while ((m = md.exec(text))) { if (re.test(m[2]) && !seen.has(m[2])) { seen.add(m[2]); out.push({ href: m[2], title: m[1].replace(/[*_#]/g, '').trim() }); } re.lastIndex = 0; }
+  const a = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  while ((m = a.exec(text))) { const h = decodeEntities(m[1]); if (re.test(h) && !seen.has(h)) { seen.add(h); out.push({ href: h, title: decodeEntities(m[2].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim() }); } re.lastIndex = 0; }
+  return out;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   FILTERS
+   ══════════════════════════════════════════════════════════════════ */
+function titlePasses(title, inc, exc) {
+  const t = String(title || '').toLowerCase();
+  for (const x of exc) if (new RegExp('\\b' + esc(x)).test(t)) return 'title has “' + x + '”';
+  for (const k of inc) if (new RegExp('\\b' + esc(k)).test(t)) return true;
+  return 'not a design role';
+}
+function locationPasses(loc, places, remote) {
+  const l = String(loc || '').toLowerCase().trim();
+  if (!l || l.includes('los angeles area')) return true;
+  for (const p of places) {
+    if (p === 'remote') { if (remote && /remote|anywhere|virtual|^(united states( of america)?|usa?)$/.test(l)) return true; continue; }
+    if (l.includes(p)) return true;
+  }
+  return false;
+}
+function filterCtx() {
+  const p = DB.prefs; const inc = lines(p.include), exc = lines(p.exclude), loc = lines(p.locations);
+  return {
+    terms: SEARCH_TERMS,
+    titleOk: (t) => titlePasses(t, inc, exc) === true,
+    locOk: (l) => locationPasses(l, loc, p.allow_remote),
+    known: (src, ext) => { const j = DB.jobs[jobId(src, ext)]; return !!(j && j.description); },
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   STUDIO ADAPTERS
+   ══════════════════════════════════════════════════════════════════ */
+const ADAPTERS = {
+  async amazon(ctx) {
+    const out = {}; const cities = ['Culver City', 'Santa Monica', 'Los Angeles', 'Burbank'];
+    for (const term of ctx.terms) {
+      for (let offset = 0; offset < 200; offset += 100) {
+        let q = 'base_query=' + encodeURIComponent(term) + '&offset=' + offset + '&result_limit=100&sort=recent';
+        cities.forEach(c => q += '&normalized_city_name[]=' + encodeURIComponent(c));
+        const d = await getJSON('https://www.amazon.jobs/en/search.json?' + q);
+        const jobs = d.jobs || [];
+        for (const j of jobs) {
+          const title = (j.title || '').trim(), loc = (j.normalized_location || j.location || '').trim(), id = String(j.id_icims || j.id || '');
+          if (!id || out[id] || !ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+          const desc = htmlToText((j.description || '') + '\n\nBASIC QUALIFICATIONS\n' + (j.basic_qualifications || '') + '\n\nPREFERRED QUALIFICATIONS\n' + (j.preferred_qualifications || ''));
+          out[id] = { ext_id: id, title, company: 'Amazon' + (j.business_category && j.business_category.length < 40 ? ' · ' + j.business_category : ''), location: loc,
+            url: 'https://www.amazon.jobs' + (j.job_path || '/en/jobs/' + id), posted_at: j.posted_date ? new Date(j.posted_date).toISOString().slice(0, 10) : null, salary: findPay(desc), description: desc };
+        }
+        if (jobs.length < 100) break;
+      }
+    }
+    return Object.values(out);
+  },
+
+  async netflix(ctx) {
+    const base = 'https://explore.jobs.netflix.net'; const out = {}; let apiDead = false;
+    for (const term of ctx.terms) for (const where of ['Los Angeles', 'Remote']) {
+      let list = null;
+      if (!apiDead) { try { list = (await getJSON(`${base}/api/apply/v2/jobs?domain=netflix.com&query=${encodeURIComponent(term)}&location=${encodeURIComponent(where)}&start=0&num=50&sort_by=relevance`)).positions; } catch (e) { apiDead = true; } }
+      if (!list) {
+        // the careers page carries the same job list inside it
+        const html = await getText(`${base}/careers?domain=netflix.com&query=${encodeURIComponent(term)}&location=${encodeURIComponent(where)}`, (t) => !!t && (t.includes('"positions"') || /careers\/job\/\d+/.test(t)));
+        list = extractArray(html, 'positions') || findLinks(html, /\/careers\/job\/\d+/).map(l => ({ id: l.href.match(/job\/(\d+)/)[1], name: l.title, location: where }));
+      }
+      for (const p of list || []) {
+        const id = String(p.id || ''), title = (p.name || '').trim(), loc = (p.locations || [p.location]).filter(Boolean).join(' / ') || where;
+        if (!id || out[id] || !ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+        let desc = '';
+        if (!ctx.known('netflix', id)) {
+          try { desc = htmlToText((await getJSON(`${base}/api/apply/v2/jobs/${id}?domain=netflix.com`)).job_description || ''); } catch (e) {}
+          if (desc.length < 200) { try { desc = (await readJobPage(`${base}/careers/job/${id}`)).description; } catch (e) {} }
+        }
+        out[id] = { ext_id: id, title, company: 'Netflix', location: loc, url: p.canonicalPositionUrl || `${base}/careers/job/${id}`,
+          posted_at: p.t_create ? new Date(p.t_create * 1000).toISOString().slice(0, 10) : null, salary: findPay(desc), description: desc };
+      }
+    }
+    return Object.values(out);
+  },
+
+  async apple(ctx) {
+    const out = {};
+    const isPage = (t) => !!t && (/\/details\/\d{6,}/.test(t) || /"positionId"/.test(t) || /no results|0 results/i.test(t) || (t.length > 5000 && /apple/i.test(t)));
+    let anyOk = false, lastErr = null;
+    for (const term of ctx.terms) {
+      for (let page = 1; page <= 3; page++) {
+        const url = `https://jobs.apple.com/en-us/search?search=${encodeURIComponent(term)}&sort=newest&location=los-angeles-LAS&page=${page}`;
+        let html; try { html = await getText(url, isPage); anyOk = true; } catch (e) { if (e.name === 'StopError') throw e; lastErr = e; break; }
+        let found = [];
+        let m; const re = /\/en-us\/details\/(\d{6,}(?:-\d+)?)\/([a-z0-9-]+)/gi;
+        while ((m = re.exec(html))) found.push({ id: m[1], slug: m[2] });
+        if (!found.length) { const rj = /"positionId"\s*:\s*"([\d-]{6,})"[\s\S]{0,400}?"postingTitle"\s*:\s*"([^"]+)"/g; while ((m = rj.exec(html))) found.push({ id: m[1], slug: m[2].toLowerCase().replace(/[^a-z0-9]+/g, '-') }); }
+        let fresh = 0;
+        for (const { id, slug } of found) {
+          if (out[id]) continue; fresh++;
+          const guess = slug.replace(/-/g, ' ');
+          if (!ctx.titleOk(guess) && !/design|ux|prototyp|creative/i.test(guess)) continue;
+          const job = { ext_id: id, title: guess.replace(/\b\w/g, c => c.toUpperCase()), company: 'Apple', location: 'Los Angeles area', url: `https://jobs.apple.com/en-us/details/${id}/${slug}`, posted_at: null, salary: '', description: '' };
+          if (!ctx.known('apple', id)) {
+            try {
+              const d = await getJSON(`https://jobs.apple.com/api/v1/jobDetails/${id}`); const r = d.res || d;
+              job.title = (r.postingTitle || job.title).trim();
+              const locs = (r.locations || []).map(l => l.name).filter(Boolean); if (locs.length) job.location = locs.join(' / ');
+              const team = (r.teamNames || [])[0]; if (team) job.company = 'Apple · ' + team;
+              const pd = r.postDateInGMT || r.postingDate; if (pd) job.posted_at = new Date(pd).toISOString().slice(0, 10);
+              const foot = (r.postingFooters || []).map(f => typeof f === 'string' ? f : Object.values(f || {}).filter(v => typeof v === 'string').join('\n')).join('\n');
+              job.description = htmlToText([r.jobSummary, r.description, r.minimumQualifications && 'MINIMUM QUALIFICATIONS\n' + r.minimumQualifications, r.preferredQualifications && 'PREFERRED QUALIFICATIONS\n' + r.preferredQualifications, foot].filter(Boolean).join('\n\n'));
+            } catch (e) { try { const p = await readJobPage(job.url); job.description = p.description; if (p.title) job.title = p.title; } catch (e2) { continue; } }
+            job.salary = findPay(job.description);
+          }
+          if (!ctx.titleOk(job.title) || !ctx.locOk(job.location)) continue;
+          out[id] = job;
+        }
+        if (!fresh) break;
+      }
+    }
+    if (!anyOk && lastErr) throw lastErr;
+    return Object.values(out);
+  },
+
+  async disney(ctx) {
+    // disneycareers.com is a plain web page (Workday's search needs a POST that the free readers can't send)
+    const base = 'https://www.disneycareers.com'; const out = {}; let anyOk = false, lastErr = null;
+    for (const term of ctx.terms) {
+      for (let pg = 1; pg <= 3; pg++) {
+        let html; try { html = await getText(`${base}/en/search-jobs?k=${encodeURIComponent(term)}&l=${encodeURIComponent('Los Angeles, California')}&p=${pg}`, (t) => !!t && (/\/en\/job\//.test(t) || /no results|0 results/i.test(t) || (t.length > 5000 && /disney/i.test(t)))); anyOk = true; } catch (e) { if (e.name === 'StopError') throw e; lastErr = e; break; }
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        let items = [...doc.querySelectorAll('a[href*="/en/job/"]')].map(a => { const li = a.closest('li') || a.parentElement; const locEl = li && li.querySelector('.job-location, [class*=location]'); return { href: a.getAttribute('href'), title: (a.querySelector('h2,h3') || a).textContent.replace(/\s+/g, ' ').trim(), loc: locEl ? locEl.textContent.replace(/\s+/g, ' ').trim() : '' }; });
+        if (!items.length) items = findLinks(html, /\/en\/job\/[^/]+\/[^/]+\/391\/\d+/).map(l => ({ ...l, loc: '' }));
+        let fresh = 0;
+        for (const it of items) {
+          const m = String(it.href).match(/\/en\/job\/([^/]+)\/([^/]+)\/391\/(\d+)/); if (!m) continue;
+          const id = m[3]; if (out[id]) continue; fresh++;
+          const title = it.title.replace(/\s*(Burbank|Glendale|Los Angeles|Santa Monica|Anaheim)[^]*$/, '').trim() || m[2].replace(/-/g, ' ');
+          const loc = it.loc || m[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) + ', California';
+          if (!ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+          const job = { ext_id: id, title, company: 'Disney', location: loc, url: base + `/en/job/${m[1]}/${m[2]}/391/${id}`, posted_at: null, salary: '', description: '' };
+          if (!ctx.known('disney', id)) {
+            try { const d = await readJobPage(job.url, '.ats-description, .job-description, #anchor-description'); job.description = d.description; job.posted_at = d.posted_at || null; if (d.location) job.location = d.location; job.salary = findPay(job.description); } catch (e) {}
+          }
+          out[id] = job;
+        }
+        if (!fresh) break;
+      }
+    }
+    if (!anyOk && lastErr) throw lastErr;
+    return Object.values(out);
+  },
+
+  async wbd(ctx) {
+    // Workday's job list is drawn by script, so the reader renders it; each job's details come from Workday's GET endpoint
+    try { return await workday(ctx, 'wbd', 'Warner Bros. Discovery', 'warnerbros.wd5.myworkdayjobs.com', 'warnerbros', 'global'); }
+    catch (e) { return await workdayViaReader(ctx, 'wbd', 'Warner Bros. Discovery', 'warnerbros.wd5.myworkdayjobs.com', 'warnerbros', 'global'); }
+  },
+
+  async nbcu(ctx) {
+    const api = 'https://api.smartrecruiters.com/v1/companies/NBCUniversal3/postings'; const out = {};
+    for (const term of ctx.terms) {
+      for (let offset = 0; offset < 300; offset += 100) {
+        const d = await getJSON(`${api}?q=${encodeURIComponent(term)}&limit=100&offset=${offset}&country=us`);
+        const list = d.content || [];
+        for (const p of list) {
+          const id = String(p.id || ''), title = (p.name || '').trim(), l = p.location || {};
+          const loc = (l.fullLocation || [l.city, l.region].filter(Boolean).join(', ')) + (l.remote ? ' (Remote)' : '');
+          if (!id || out[id] || !ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+          const job = { ext_id: id, title, company: 'NBCUniversal', location: loc, url: `https://jobs.smartrecruiters.com/NBCUniversal3/${id}`, posted_at: (p.releasedDate || '').slice(0, 10) || null, salary: '', description: '' };
+          if (!ctx.known('nbcu', id)) {
+            const det = await getJSON(`${api}/${id}`); const s = (det.jobAd || {}).sections || {};
+            job.description = htmlToText([s.jobDescription && s.jobDescription.text, s.qualifications && s.qualifications.text && 'QUALIFICATIONS\n' + s.qualifications.text, s.additionalInformation && s.additionalInformation.text].filter(Boolean).join('\n\n'));
+            if (det.postingUrl) job.url = det.postingUrl; job.salary = findPay(job.description);
+          }
+          out[id] = job;
+        }
+        if (list.length < 100) break;
+      }
+    }
+    return Object.values(out);
+  },
+
+  async paramount(ctx) {
+    const base = 'https://careers.paramount.com'; const out = {}; let anyOk = false, lastErr = null;
+    for (const term of ctx.terms) {
+      for (let row = 0; row < 150; row += 25) {
+        let html; try { html = await getText(`${base}/search/?q=${encodeURIComponent(term)}&locationsearch=${encodeURIComponent('Los Angeles')}&startrow=${row}`, (t) => !!t && (/\/job\/[^"\/]+\/\d{6,}/.test(t) || /no results|There are currently no open/i.test(t) || (t.length > 5000 && /paramount/i.test(t)))); anyOk = true; } catch (e) { if (e.name === 'StopError') throw e; lastErr = e; break; }
+        const re = /href="(\/job\/([^"\/]+)\/(\d{6,})\/?)"[^>]*>([\s\S]*?)<\/a>/gi; let m, fresh = 0;
+        while ((m = re.exec(html))) {
+          const [, href, slug, id, inner] = m; const title = decodeEntities(inner.replace(/<[^>]+>/g, '')).trim();
+          if (!title || out[id]) continue; fresh++;
+          const loc = paramountLoc(slug);
+          if (!ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+          const job = { ext_id: id, title, company: 'Paramount', location: loc, url: base + href, posted_at: null, salary: '', description: '' };
+          if (!ctx.known('paramount', id)) {
+            let page = ''; try { page = await getText(base + href, (t) => !!t && t.length > 800); } catch (e) { if (e.name === 'StopError') throw e; }
+            const doc = new DOMParser().parseFromString(page, 'text/html');
+            const el = doc.querySelector('.jobdescription, [itemprop=description], .job-description');
+            job.description = htmlToText(el ? el.innerHTML : page.slice(0, 20000));
+            const dp = doc.querySelector('[itemprop=datePosted]'); const dv = dp && (dp.getAttribute('content') || dp.textContent);
+            if (dv && !isNaN(new Date(dv))) job.posted_at = new Date(dv).toISOString().slice(0, 10);
+            job.salary = findPay(job.description);
+          }
+          out[id] = job;
+        }
+        if (!fresh) break;
+      }
+    }
+    if (!anyOk && lastErr) throw lastErr;
+    return Object.values(out);
+  },
+};
+
+// Greenhouse and Lever boards: one request returns every job with its description.
+for (const [key, [kind, token]] of Object.entries(BOARDS)) {
+  ADAPTERS[key] = async (ctx) => {
+    const company = STUDIOS[key];
+    if (kind === 'greenhouse') {
+      const d = await getJSON(`https://boards-api.greenhouse.io/v1/boards/${token}/jobs?content=true`);
+      return (d.jobs || []).map(j => ({ j, loc: [(j.location || {}).name, ...((j.offices || []).map(o => o.name))].filter(Boolean).join(' / ') }))
+        .filter(({ j, loc }) => ctx.titleOk(j.title || '') && ctx.locOk(loc))
+        .map(({ j, loc }) => { const desc = htmlToText(decodeEntities(j.content || '')); return { ext_id: String(j.id), title: j.title.trim(), company, location: loc, url: j.absolute_url, posted_at: (j.first_published || j.updated_at || '').slice(0, 10) || null, salary: findPay(desc), description: desc }; });
+    }
+    const list = await getJSON(`https://api.lever.co/v0/postings/${token}?mode=json`);
+    return (Array.isArray(list) ? list : []).map(j => ({ j, loc: [(j.categories || {}).location, ...(((j.categories || {}).allLocations) || []), j.workplaceType === 'remote' ? 'Remote' : ''].filter(Boolean).join(' / ') }))
+      .filter(({ j, loc }) => ctx.titleOk(j.text || '') && ctx.locOk(loc))
+      .map(({ j, loc }) => { const desc = htmlToText((j.description || '') + '\n' + (j.lists || []).map(l => l.text + '\n' + l.content).join('\n') + '\n' + (j.additional || '')); return { ext_id: j.id, title: j.text.trim(), company, location: loc, url: j.hostedUrl, posted_at: j.createdAt ? new Date(j.createdAt).toISOString().slice(0, 10) : null, salary: findPay(desc), description: desc }; });
+  };
+}
+
+function paramountLoc(slug) {
+  const s = slug.replace(/-/g, ' '); const m = s.match(/^(.*?)\s+([A-Z]{2})\s+(\d{5})$/);
+  if (!m) return s;
+  for (const c of ['Los Angeles', 'West Hollywood', 'Hollywood', 'Burbank', 'Studio City', 'Santa Monica', 'Culver City', 'Glendale', 'Universal City', 'North Hollywood', 'New York', 'Miami', 'Atlanta', 'Chicago', 'San Francisco']) if (m[1].toLowerCase().startsWith(c.toLowerCase())) return `${c}, ${m[2]} ${m[3]}`;
+  return /^9[01]/.test(m[3]) ? `Los Angeles area, ${m[2]} ${m[3]}` : `${m[2]} ${m[3]}`;
+}
+
+async function workday(ctx, src, company, host, tenant, site) {
+  const api = `https://${host}/wday/cxs/${tenant}/${site}`; const out = {};
+  for (const term of ctx.terms) {
+    for (let offset = 0; offset < 100; offset += 20) {
+      const d = await postJSON(`${api}/jobs`, { appliedFacets: {}, limit: 20, offset, searchText: term });
+      const list = d.jobPostings || [];
+      for (const p of list) {
+        const path = p.externalPath || '', title = (p.title || '').trim(), loc = (p.locationsText || '').trim();
+        if (!path || !ctx.titleOk(title)) continue;
+        const id = String((p.bulletFields || [])[0] || path.split('/').pop());
+        if (out[id]) continue;
+        const multi = /^\d+\s+Locations?$/i.test(loc);
+        if (!multi && !ctx.locOk(loc)) continue;
+        const job = { ext_id: id, title, company, location: loc, url: `https://${host}/${site}${path}`, posted_at: wdPosted(p.postedOn || ''), salary: '', description: '' };
+        if (multi || !ctx.known(src, id)) {
+          const det = await getJSON(`${api}${path}`); const info = det.jobPostingInfo || {};
+          job.location = [info.location, ...(info.additionalLocations || [])].filter(Boolean).join(' / ') || loc;
+          if (!ctx.locOk(job.location)) continue;
+          job.description = htmlToText(info.jobDescription || ''); job.url = info.externalUrl || job.url;
+          if (info.startDate) job.posted_at = info.startDate.slice(0, 10);
+          job.salary = findPay(job.description);
+        }
+        out[id] = job;
+      }
+      if (list.length < 20 || (d.total && offset + 20 >= d.total)) break;
+    }
+  }
+  return Object.values(out);
+}
+async function workdayViaReader(ctx, src, company, host, tenant, site) {
+  const out = {};
+  for (const term of ctx.terms) {
+    let page = '';
+    try { page = await jina(`https://${host}/${site}?q=${encodeURIComponent(term)}`, true); } catch (e) { try { page = await jina(`https://${host}/${site}?q=${encodeURIComponent(term)}`, false); } catch (e2) { continue; } }
+    const links = findLinks(page, new RegExp('/' + site + '/job/[^"\'?)\\s]+'));
+    for (const l of links) {
+      const path = (l.href.match(new RegExp('/' + site + '(/job/[^"\'?)\\s]+)')) || [])[1]; if (!path) continue;
+      const id = (path.match(/_(R?\d[\w-]*)$/) || [, path.split('/').pop()])[1];
+      if (out[id] || (l.title && !ctx.titleOk(l.title))) continue;
+      try {
+        const info = (await getJSON(`https://${host}/wday/cxs/${tenant}/${site}${path}`)).jobPostingInfo || {};
+        const title = (info.title || l.title || '').trim(); const loc = [info.location, ...(info.additionalLocations || [])].filter(Boolean).join(' / ');
+        if (!ctx.titleOk(title) || !ctx.locOk(loc)) continue;
+        const desc = htmlToText(info.jobDescription || '');
+        out[id] = { ext_id: id, title, company, location: loc, url: info.externalUrl || `https://${host}/${site}${path}`, posted_at: info.startDate ? info.startDate.slice(0, 10) : null, salary: findPay(desc), description: desc };
+      } catch (e) {}
+    }
+  }
+  if (!Object.keys(out).length) throw new Error(host + ' could not be read through the free readers right now');
+  return Object.values(out);
+}
+function wdPosted(s) {
+  s = s.toLowerCase(); const d = new Date();
+  if (s.includes('today')) return d.toISOString().slice(0, 10);
+  if (s.includes('yesterday')) { d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); }
+  const m = s.match(/(\d+)\+?\s*days?/); if (m) { d.setDate(d.getDate() - +m[1]); return d.toISOString().slice(0, 10); }
+  return null;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GEMINI CONNECTION — the only two functions that talk to the AI.
+   Note for Gemini: when this app runs inside Gemini, replace the BODY of askGemini()
+   (and searchWebWithGemini()) with your built-in way of calling the model and Google Search.
+   Keep the same inputs and return values; nothing else in the app needs to change.
+   ══════════════════════════════════════════════════════════════════ */
+let lastCall = 0; let goodModel = null; let everWorked = false;
+
+// Input: { system, prompt, schema (optional JSON schema), temperature, tools (optional) }.  Returns the model's text.
+async function askGemini({ system, prompt, schema, temperature = 0.3, tools }) {
+  const key = (DB.prefs.api_key || '').trim();
+  const models = goodModel ? [goodModel, ...MODELS.filter(m => m !== goodModel)] : MODELS;
+  let lastErr = '', lastStatus = 0;
+  for (const model of models) {
+    let useSchema = !!schema && !tools;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const gap = 1200 - (Date.now() - lastCall); if (gap > 0) await sleep(gap);
+      lastCall = Date.now();
+      const gen = { temperature };
+      if (!tools) gen.responseMimeType = 'application/json';
+      if (useSchema) gen.responseSchema = schema;
+      const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: prompt + (schema && !useSchema ? '\n\nAnswer with JSON only, in this shape:\n' + JSON.stringify(schemaExample(schema)) : '') }] }], generationConfig: gen };
+      if (tools) body.tools = tools;
+      let r, raw = '';
+      try {
+        r = await fetchTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 60000);
+        raw = await r.text();
+      } catch (e) { if (e.name === 'StopError') throw e; lastErr = e.name === 'AbortError' ? 'Gemini took too long' : 'network problem'; continue; }
+      lastStatus = r.status;
+      if (r.status === 429 || r.status === 503 || r.status === 500) { lastErr = r.status === 429 ? 'Gemini is rate-limiting' : 'Gemini is busy'; await sleep(4000 * (attempt + 1)); continue; }
+      if (r.status === 404) { lastErr = model + ' unavailable'; break; }
+      if (r.status === 400 && useSchema) { useSchema = false; continue; }
+      if (r.status === 401 || r.status === 403) { lastErr = 'Gemini refused the request (' + r.status + ')'; if (everWorked) { await sleep(3000); continue; } break; }
+      if (!r.ok) { lastErr = 'Gemini ' + r.status + ': ' + raw.slice(0, 160); break; }
+      let d = {}; try { d = JSON.parse(raw); } catch (e) {}
+      const text = ((d.candidates || [])[0]?.content?.parts || []).filter(p => !p.thought).map(p => p.text || '').join('');
+      if (!text) { lastErr = 'empty answer'; continue; }
+      goodModel = model; everWorked = true; DB.aiCalls[today()] = (DB.aiCalls[today()] || 0) + 1;
+      return text;
+    }
+  }
+  if ((lastStatus === 401 || lastStatus === 403) && !everWorked) throw new Error('Gemini needs a key here. Open this app inside Gemini, or add a key on the Search page.');
+  throw new Error(lastErr || 'Gemini did not answer');
+}
+
+// Uses Gemini with Google Search to find postings when a career site can't be read. Returns [{title, url, location, posted, description}].
+async function searchWebWithGemini(company, domainHint) {
+  const text = await askGemini({
+    system: 'You find real, currently open job postings. Only list postings you found through search, with their exact URLs. Never invent postings.',
+    prompt: `Find currently open ${company} jobs in the Los Angeles area (or remote in the US) for product design, UX/UI, visual design, design technology, creative technology, or prototyping. Prefer links on ${domainHint}. Return JSON only: an array of {"title","url","location","posted","description"} where description is 4–8 sentences covering responsibilities and requirements from the posting. Return [] if you find none.`,
+    temperature: 0.1, tools: [{ google_search: {} }] });
+  const a = text.indexOf('['), b = text.lastIndexOf(']');
+  try { const arr = JSON.parse(text.slice(a, b + 1)); return Array.isArray(arr) ? arr : []; } catch (e) { return []; }
+}
+
+const WEB_HINTS = { amazon: 'amazon.jobs', netflix: 'explore.jobs.netflix.net', apple: 'jobs.apple.com', disney: 'disneycareers.com', wbd: 'careers.wbd.com or warnerbros.wd5.myworkdayjobs.com', nbcu: 'jobs.smartrecruiters.com/NBCUniversal3', paramount: 'careers.paramount.com' };
+async function webSearchJobs(src, label, ctx) {
+  if (!WEB_HINTS[src]) return [];
+  const list = await searchWebWithGemini(label, WEB_HINTS[src]);
+  const out = [];
+  for (const it of list.slice(0, 12)) {
+    if (!it || !it.url || !/^https?:\/\//.test(it.url) || !it.title || !ctx.titleOk(it.title) || !ctx.locOk(it.location || '')) continue;
+    const job = { ext_id: 'web:' + hashId(it.url), title: String(it.title).trim(), company: label, location: it.location || 'Los Angeles area', url: it.url, posted_at: it.posted && !isNaN(new Date(it.posted)) ? new Date(it.posted).toISOString().slice(0, 10) : null, salary: '', description: '', via: 'web search' };
+    try { const p = await readJobPage(it.url); if ((p.description || '').length > 300) job.description = p.description; } catch (e) {}
+    if (!job.description) job.description = 'Summary found by web search (open the posting for the full text):\n\n' + (it.description || '');
+    job.salary = findPay(job.description); out.push(job);
+  }
+  return out;
+}
+
+async function gemini(system, prompt, schema, temperature = 0.3) {
+  const text = await askGemini({ system, prompt, schema, temperature });
+  const a = text.indexOf('{'), b = text.lastIndexOf('}');
+  try { return JSON.parse(a >= 0 ? text.slice(a, b + 1) : text); } catch (e) {}
+  // one retry if the answer wasn't clean JSON
+  const t2 = await askGemini({ system, prompt: prompt + '\n\nReturn valid JSON only.', schema, temperature });
+  const a2 = t2.indexOf('{'), b2 = t2.lastIndexOf('}');
+  return JSON.parse(a2 >= 0 ? t2.slice(a2, b2 + 1) : t2);
+}
+function schemaExample(s) {
+  if (!s) return {};
+  if (s.type === 'OBJECT') { const o = {}; for (const [k, v] of Object.entries(s.properties || {})) o[k] = schemaExample(v); return o; }
+  if (s.type === 'ARRAY') return [schemaExample(s.items)];
+  if (s.enum) return s.enum.join(' | ');
+  return s.type === 'INTEGER' ? 0 : '…';
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PROMPTS (same rules as the server version)
+   ══════════════════════════════════════════════════════════════════ */
+const vaultBlock = () => '=== CAREER VAULT: RESUME ===\n' + DB.vault.trim() + '\n' + (DB.extra.trim() ? '\n=== CAREER VAULT: EXTRA TRUE FACTS (not on the resume yet) ===\n' + DB.extra.trim() + '\n' : '');
+const jobBlock = (j) => `=== JOB POSTING ===\nCompany: ${j.company}\nTitle: ${j.title}\nLocation: ${j.location}\n${j.salary ? 'Pay: ' + j.salary + '\n' : ''}${j.posted_at ? 'Posted: ' + j.posted_at + '\n' : ''}\n${(j.description || '').slice(0, 14000)}\n`;
+const S = { type: 'STRING' }, A = { type: 'ARRAY', items: { type: 'STRING' } }, FIT = { type: 'STRING', enum: ['Strong', 'Partial', 'Gap'] };
+
+const SCORE_SYSTEM = `You are a demanding but fair hiring manager for design and product roles at top entertainment and tech companies (Apple, Netflix, Disney, Amazon, Warner Bros. Discovery, NBCUniversal, Paramount).
+Compare ONE candidate's career vault with ONE job posting. Recruiters at these companies screen hard, so be realistic, not encouraging.
+
+How to judge
+1. core: first name the 2–3 things this job is really about: the kind of product, the domain, and the level. Rate the candidate on each: Strong only with direct experience of that exact thing in the vault; adjacent experience is Partial; missing is Gap.
+2. Generic requirements anyone can claim ("strong communication", "problem solving", "attention to detail") barely move the score. Judge mostly on the core.
+3. Years count by the kind of role asked for. Years in adjacent roles (internal tools, events, print, freelance) count as Partial, not Strong.
+4. Tools named in the posting that are not in the vault are Gaps.
+5. A Senior/Staff/Lead posting at these companies expects years of shipped consumer-facing product work at that level. Founder or solo projects are real evidence but count less than years in a product team.
+6. Grade requirements strictly. "N+ years of X" is Strong only if the vault shows N or more years doing X with that kind of title. Leading or managing people is Strong only if the vault says the candidate led or managed a team; training coworkers on tools is not team leadership.
+7. Things any applicant can simply provide (a portfolio link, coding samples, work authorization) are not Gaps just because the vault doesn't mention them; mark them Partial.
+8. level_fit compares the job's seniority with the candidate's. If the candidate is over-qualified, say "Job is more junior than the candidate" and mention it in flags; don't lower the score much for that.
+9. Calibrate: for any one candidate, most postings land between 40 and 75. 85+ is rare and means nearly every required item is clearly Strong. If the candidate supplied ratings they trust, keep your scores consistent with them.
+
+score = realistic chance this resume earns a recruiter screen, 0–100. 85–100: clearly qualified on every core item. 70–84: qualified with a few gaps. 50–69: a stretch. Below 50: missing a core requirement or under-leveled.
+pros: 3–5 strengths with exact vault evidence. cons: 2–4 honest gaps, each with a truthful tip. requirements: the posting's distinct required and preferred items (max 12) rated Strong/Partial/Gap with evidence or "Not in vault". flags: practical notes (contract, onsite days, pay, relocation). summary: one plain sentence.`;
+const SCORE_SCHEMA = { type: 'OBJECT', properties: {
+  core: { type: 'ARRAY', items: { type: 'OBJECT', properties: { focus: S, fit: FIT, why: S }, required: ['focus', 'fit', 'why'] } },
+  requirements: { type: 'ARRAY', items: { type: 'OBJECT', properties: { req: S, kind: { type: 'STRING', enum: ['Required', 'Preferred'] }, status: FIT, evidence: S }, required: ['req', 'kind', 'status', 'evidence'] } },
+  pros: { type: 'ARRAY', items: { type: 'OBJECT', properties: { point: S, evidence: S }, required: ['point', 'evidence'] } },
+  cons: { type: 'ARRAY', items: { type: 'OBJECT', properties: { gap: S, tip: S }, required: ['gap', 'tip'] } },
+  flags: A, level_fit: { type: 'STRING', enum: ['Job is more senior than the candidate', 'Matches the candidate', 'Job is more junior than the candidate'] }, score: { type: 'INTEGER' }, summary: S },
+  required: ['core', 'requirements', 'pros', 'cons', 'flags', 'level_fit', 'score', 'summary'] };
+
+function capScore(r) {
+  let s = Math.max(0, Math.min(100, parseInt(r.score, 10) || 0)); const raw = s; const why = []; const core = (r.core || []).map(c => c.fit);
+  const cap = (n, w) => { if (s > n) { s = n; } why.push(w); };
+  if (core.includes('Gap')) cap(65, 'a core part of the job is a gap');
+  if (r.level_fit === 'Job is more senior than the candidate' || r.level_fit === 'Above level') cap(60, 'the job is more senior than your experience');
+  if (core.length && !core.includes('Strong')) cap(70, 'no core part is a strong match');
+  // rules that don't depend on how the AI labels its own verdict
+  let gaps = 0, partial = 0;
+  for (const q of r.requirements || []) {
+    if (q.kind !== 'Required') continue;
+    if (q.status === 'Gap') gaps++; if (q.status === 'Partial') partial++;
+    const t = String(q.req || '').toLowerCase();
+    if (q.status !== 'Strong' && /\d+\+?\s*(?:years?|yrs).{0,60}(lead|leader|manag|director|supervis|head of)|(lead|manag|director|supervis).{0,40}\d+\+?\s*(?:years?|yrs)/.test(t)) cap(55, 'it requires years of leading a team');
+  }
+  if (gaps >= 2) cap(50, 'two or more required items are gaps'); else if (gaps === 1) cap(65, 'a required item is a gap');
+  if (partial >= 3) cap(75, 'several required items are only partial');
+  r.score = s; if (s !== raw) { r.capped_from = raw; r.capped_why = [...new Set(why)].filter((w, i, a) => a.indexOf(w) === i); }
+  return r;
+}
+async function scoreJob(job) { const a = (DB.prefs.anchors || '').trim(); return capScore(await gemini(SCORE_SYSTEM, vaultBlock() + (a ? '\n=== RATINGS THE CANDIDATE TRUSTS (stay consistent with this scale) ===\n' + a + '\n' : '') + '\n' + jobBlock(job), SCORE_SCHEMA, 0.2)); }
+
+const PARSE_SYSTEM = `Split this resume into structured parts. You are a copier, not an editor.
+- Copy every piece of text exactly, character for character. Do not fix, shorten, merge, reword, or reorder anything.
+- Every line of the resume must land in exactly one place. Nothing may be dropped.
+- name: the full name at the top. headline_parts: the line under the name split on its separators.
+- summary: the summary paragraph(s), exactly.
+- roles: every experience entry in order, including grouped entries like "Earlier roles": title, company and location (split on " — " or ","), dates, bullets exactly.
+- skills: each skills line as group (text before the first colon) and items (the rest).
+- sections: every other section (selected products, creator practice, education, certifications…) with heading and lines exactly.
+- The contact line is not needed.`;
+const PARSE_SCHEMA = { type: 'OBJECT', properties: { name: S, headline_parts: A, summary: S,
+  roles: { type: 'ARRAY', items: { type: 'OBJECT', properties: { title: S, company: S, location: S, dates: S, bullets: A }, required: ['title', 'company', 'dates', 'bullets'] } },
+  skills: { type: 'ARRAY', items: { type: 'OBJECT', properties: { group: S, items: S }, required: ['group', 'items'] } },
+  sections: { type: 'ARRAY', items: { type: 'OBJECT', properties: { heading: S, lines: A }, required: ['heading', 'lines'] } } },
+  required: ['name', 'headline_parts', 'summary', 'roles', 'skills', 'sections'] };
+
+const LETTER_RULES = `- 250–330 words, 3–4 paragraphs. greeting "Dear Hiring Team," unless the posting names a person. closing: a simple sign-off; the app adds the name.
+- First sentence: a specific, true reason the role fits, from the vault. Never open with "I am writing to express", "I am excited to apply" or similar.
+- Cite 2–3 real achievements exactly as the vault describes them; never merge separate facts (a number belongs only to the thing the vault attaches it to).
+- Never claim passions or interests the vault doesn't state. If the posting asks for something the person lacks, one honest sentence is fine.
+- Sound like this specific person, not like AI: short sentences, contractions are fine, concrete details over adjectives, one small honest opinion is welcome.
+- Never use em dashes or en dashes in sentences. Use commas, or parentheses for an aside.
+- Avoid these words and phrases: leverage, passion/passionate, excited/thrilled, seamless, robust, dynamic, synergy, spearheaded, delve, testament to, cutting-edge, perfect fit, align perfectly, deeply admire, fast-paced, "I am confident that".
+- If a VOICE SAMPLE is given, copy its rhythm, punctuation habits and word choices (never its content).
+- If HOME AREA is given and the job is in the Los Angeles area, mention it once, naturally, in parentheses, e.g. "I'm based in Los Angeles (I live in Burbank)". Don't claim commute times or distances.
+- If CANDIDATE'S OWN LINE is given, include it word for word as its own sentence where it fits best. Don't edit it.`;
+const KIT_SYSTEM = `You prepare one job application for a real person who will send it under their own name. Truth matters more than polish.
+
+THE RESUME: you do not rewrite it. You choose emphasis, and the app assembles the resume from the person's own words:
+- headline_order: indexes of ALL headline parts, most relevant first.
+- roles: for EVERY role, its bullet IDs ordered most relevant first.
+- omit: bullet IDs to leave out only if clearly irrelevant. At most 3, never the only bullet of a role. Usually empty.
+- skill_order: skill group IDs, most relevant first.
+- summary: rewrite the summary for this job in 3–4 sentences using only vault facts. Describe the person only with identities from the headline parts; never add seniority or titles they haven't held (senior, lead, staff, principal, expert, manager, head). No claims the vault doesn't state ("proven track record", "led", "robust", "seamless", "influenced product strategy"). Don't copy the posting's phrases as the person's experience. Keep numbers exact.
+- changes: 3–6 short notes on what you emphasized and why.
+
+THE COVER LETTER:
+${LETTER_RULES}`;
+const KIT_SCHEMA = { type: 'OBJECT', properties: { headline_order: { type: 'ARRAY', items: { type: 'INTEGER' } },
+  roles: { type: 'ARRAY', items: { type: 'OBJECT', properties: { id: S, bullet_ids: A }, required: ['id', 'bullet_ids'] } },
+  omit: A, skill_order: A, summary: S, changes: A,
+  cover_letter: { type: 'OBJECT', properties: { greeting: S, paragraphs: A, closing: S }, required: ['greeting', 'paragraphs', 'closing'] } },
+  required: ['headline_order', 'roles', 'omit', 'skill_order', 'summary', 'changes', 'cover_letter'] };
+
+const VERIFY_SYSTEM = `You are a strict fact-checker. You get a candidate's career vault, a job posting, and a resume summary + cover letter written for the candidate.
+List every statement about the candidate that the vault does not directly support: titles or seniority they haven't held; inflated scope or invented actions ("defended designs to leadership", "proven track record"); merged or changed facts (a number attached to the wrong thing); passions or interests the vault doesn't state; phrases lifted from the posting presented as the candidate's experience; clichés ("I am writing to express", "align perfectly", "deeply admire", "cutting-edge", "perfect fit").
+Statements about the company or the role are fine. Quote the exact words. Return an empty list if everything is supported.`;
+const VERIFY_SCHEMA = { type: 'OBJECT', properties: { issues: { type: 'ARRAY', items: { type: 'OBJECT', properties: { quote: S, problem: S }, required: ['quote', 'problem'] } } }, required: ['issues'] };
+const REPAIR_SYSTEM = `Fix a resume summary and cover letter for a real candidate. A fact-checker found statements the vault does not support, clichés, or dashes. Rewrite only what's needed so every listed problem is gone, replacing each flagged statement with something the vault actually says. Use commas or parentheses instead of dashes. Keep any sentence the candidate wrote themselves exactly as it is. Keep everything else and the same length range. Add no new claims.`;
+
+/* ── resume structure ───────────────────────────────────────── */
+function withIds(raw) {
+  const st = { name: (raw.name || '').trim(), headline_parts: (raw.headline_parts || []).map(s => String(s).trim()).filter(Boolean), summary: (raw.summary || '').trim(), roles: [], skills: [], sections: [] };
+  (raw.roles || []).forEach((r, i) => { const id = 'R' + (i + 1); st.roles.push({ id, title: (r.title || '').trim(), company: (r.company || '').trim(), location: (r.location || '').trim(), dates: (r.dates || '').trim(), bullets: (r.bullets || []).map((b, j) => ({ id: id + '.B' + (j + 1), text: String(b).trim() })) }); });
+  (raw.skills || []).forEach((k, i) => st.skills.push({ id: 'K' + (i + 1), group: (k.group || '').trim(), items: (k.items || '').trim() }));
+  (raw.sections || []).forEach((s, i) => st.sections.push({ id: 'S' + (i + 1), heading: (s.heading || '').trim(), lines: (s.lines || []).map(l => String(l).trim()).filter(Boolean) }));
+  return st;
+}
+function structCheck(vault, st) {
+  const v = normText(vault); const warn = [];
+  const pieces = [st.summary, ...st.headline_parts]; st.roles.forEach(r => { pieces.push(r.title); r.bullets.forEach(b => pieces.push(b.text)); });
+  st.skills.forEach(k => pieces.push(k.items)); st.sections.forEach(s => s.lines.forEach(l => pieces.push(l)));
+  for (const p of pieces) if (p && !v.includes(normText(p))) warn.push('Changed while reading: “' + p.slice(0, 90) + '”');
+  const extra = [st.name, st.headline_parts.join(' '), ...st.roles.map(r => `${r.company} ${r.location} ${r.dates}`), ...st.skills.map(k => k.group), ...st.sections.map(s => s.heading)];
+  const words = (t) => normText(t).split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1);
+  const have = new Set(words([...pieces, ...extra].join(' ')));
+  for (const line of vault.split(/\r?\n/)) {
+    if (line.trim().length < 30 || line.includes('@')) continue;
+    const w = words(line); if (w.length && w.filter(x => have.has(x)).length / w.length < 0.85) warn.push('Not picked up: “' + line.trim().slice(0, 90) + '”');
+  }
+  return warn.slice(0, 12);
+}
+// Reads the resume right here, without AI, for the common layout: name, headline, contact, then sections with
+// role title lines followed by "Company — City<tab>Dates" lines and bullets. AI is only the backup.
+const HEADINGS = /^(summary|profile|about|experience|work experience|professional experience|employment|skills|technical skills|core skills|education|certifications?|licenses?.*|selected products|products|projects|selected projects|creator practice|awards|honors|languages|volunteer.*|publications|tools|interests)$/i;
+const MON = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\\.?';
+const DATE_RANGE = new RegExp('((?:' + MON + '\\s+)?(?:19|20)\\d{2})\\s*(?:–|—|-|to)\\s*(present|current|now|(?:' + MON + '\\s+)?(?:19|20)\\d{2})', 'i');
+function localParse(vault) {
+  const raw = vault.split(/\r?\n/).map(l => l.replace(/\s+$/, '')).filter(l => l.trim());
+  const isHeading = (l, i) => i > 0 && l.trim().length < 40 && !DATE_RANGE.test(l) && (HEADINGS.test(l.trim().replace(/[:：]$/, '')) || (/^[A-Z][A-Z &/+-]{3,}$/.test(l.trim())));
+  const sec = {}; const order = []; let cur = 'HEADER';
+  raw.forEach((l, i) => { if (isHeading(l, i)) { cur = l.trim().replace(/[:：]$/, '').toUpperCase(); if (!sec[cur]) { sec[cur] = []; order.push(cur); } return; } (sec[cur] = sec[cur] || []).push(l); });
+  const header = sec.HEADER || [];
+  const name = (header[0] || '').trim();
+  const hl = header.slice(1).find(l => !/@|\d{3}[-.\s]?\d{3}/.test(l) && /[·|•]/.test(l)) || (header[1] && !/@|\d{3}/.test(header[1]) ? header[1] : '');
+  const headline_parts = hl ? hl.split(/\s*[·|•]\s*/).map(x => x.trim()).filter(Boolean) : [];
+  const expKey = order.find(k => /EXPERIENCE|EMPLOYMENT/.test(k));
+  const sumKey = order.find(k => /SUMMARY|PROFILE|ABOUT/.test(k));
+  const skKey = order.find(k => /SKILLS/.test(k) && !/CERT/.test(k));
+  const roles = []; let role = null; let prev = null;
+  for (const l0 of sec[expKey] || []) {
+    const l = l0.trim(); const dm = l.match(DATE_RANGE);
+    if (dm) {
+      const before = l.slice(0, dm.index).replace(/[\t|,–—-]+\s*$/, '').trim();
+      let title, companyPart;
+      if (prev != null && role && role.bullets.length && role.bullets[role.bullets.length - 1] === prev) { role.bullets.pop(); title = prev; companyPart = before; }
+      else if (prev != null && !role) { title = prev; companyPart = before; }
+      else { const bits = before.split(/\s+[—|]\s+|\s+-\s+/); title = bits.shift() || before; companyPart = bits.join(' — '); }
+      if (role) roles.push(role);
+      const [company, location] = companyPart.split(/\s+—\s+|\s+\|\s+|\t/).map(x => (x || '').trim());
+      role = { title: (title || '').replace(/^[•*\-–]\s*/, '').trim(), company: company || '', location: location || '', dates: dm[0].trim(), bullets: [] };
+      prev = null; continue;
+    }
+    if (role) role.bullets.push(l.replace(/^[•*\-–]\s*/, ''));
+    prev = l.replace(/^[•*\-–]\s*/, '');
+  }
+  if (role) roles.push(role);
+  const skills = (sec[skKey] || []).map(l => { const i = l.indexOf(':'); return i > 0 && i < 50 ? { group: l.slice(0, i).trim(), items: l.slice(i + 1).trim() } : { group: 'Skills', items: l.trim() }; });
+  const sections = order.filter(k => k !== expKey && k !== sumKey && k !== skKey).map(k => ({ heading: k, lines: sec[k].map(l => l.trim().replace(/^[•*\-–]\s*/, '')) }));
+  return { name, headline_parts, summary: (sec[sumKey] || []).map(l => l.trim()).join('\n'), roles, skills, sections };
+}
+function buildStruct(raw, how) { const st = withIds(raw); st.hash = hashId(DB.vault); st.warnings = structCheck(DB.vault, st); st.how = how; return st; }
+function parseContact(vault) {
+  let head = vault.split(/\r?\n/).slice(0, 8).join('  ·  ');
+  const email = (head.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/) || [''])[0];
+  if (email) head = head.split(email).join(' ');
+  const phone = ((head.match(/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/) || [''])[0]).trim();
+  const city = (head.match(/\b([A-Z][a-zA-Z.]+(?:\s[A-Z][a-zA-Z.]+)*,\s?[A-Z]{2})\b/) || [, ''])[1];
+  const links = [...new Set((head.match(/(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+\.(?:com|net|org|io|co|me|app|design|art|studio|vip)(?:\/[^\s·|,]*)?/gi) || [])
+    .map(l => l.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')))];
+  return { email, phone, city, links: links.join(', ') };
+}
+function fillContact() {
+  const c = DB.prefs.contact; const f = parseContact(DB.vault); let n = 0;
+  for (const k of ['email', 'phone', 'links']) if (!String(c[k] || '').trim() && f[k]) { c[k] = f[k]; n++; }
+  if ((!c.city || c.city === 'Los Angeles, CA') && f.city) c.city = f.city;
+  return n;
+}
+function fillName(st) {
+  fillContact();
+  const c = DB.prefs.contact; if (st.name.split(/\s+/).length >= 2 && (!c.name || (c.name.split(/\s+/).length < 2 && st.name.toLowerCase().startsWith(c.name.toLowerCase())))) c.name = st.name === st.name.toUpperCase() ? st.name.toLowerCase().replace(/\b\w/g, x => x.toUpperCase()) : st.name;
+}
+// Instant read on this device; returns the structure if it's clean enough to use.
+function readResumeLocal() {
+  if (!DB.vault.trim()) return null;
+  if (fillContact()) commit();
+  try { const st = buildStruct(localParse(DB.vault), 'instant'); if (st.roles.length && st.warnings.length <= 2) { DB.struct = st; fillName(st); commit(); return st; } return st.roles.length ? st : null; } catch (e) { return null; }
+}
+async function readResume(force) {
+  const hash = hashId(DB.vault);
+  if (!force && DB.struct && DB.struct.hash === hash) return DB.struct;
+  const local = readResumeLocal();
+  if (local && DB.struct === local) return local;
+  // unusual layout: ask Gemini to split it (still copied word for word and checked)
+  try {
+    const st = buildStruct(await gemini(PARSE_SYSTEM, '=== RESUME ===\n' + DB.vault, PARSE_SCHEMA, 0), 'AI');
+    if (!local || st.warnings.length < local.warnings.length) { DB.struct = st; fillName(st); commit(); return st; }
+  } catch (e) { if (!local) throw e; }
+  DB.struct = local; fillName(local); commit(); return local;
+}
+function structBlock(st) {
+  let o = '=== RESUME PIECES (use these IDs) ===\nHEADLINE PARTS: ' + st.headline_parts.map((h, i) => `[${i}] ${h}`).join('  ') + '\n\nCURRENT SUMMARY: ' + st.summary + '\n\n';
+  st.roles.forEach(r => { o += `${r.id}  ${r.title} | ${r.company}${r.location ? ' | ' + r.location : ''} | ${r.dates}\n`; r.bullets.forEach(b => o += `   ${b.id}  ${b.text}\n`); });
+  o += '\nSKILLS\n'; st.skills.forEach(k => o += `   ${k.id}  ${k.group}: ${k.items}\n`);
+  st.sections.forEach(s => o += '\n' + s.heading.toUpperCase() + '\n   ' + s.lines.join('\n   ') + '\n');
+  return o;
+}
+function assembleKit(st, sel) {
+  const parts = st.headline_parts; const order = [...new Set((sel.headline_order || []).filter(i => Number.isInteger(i) && parts[i] != null))];
+  parts.forEach((_, i) => { if (!order.includes(i)) order.push(i); });
+  const omit = (sel.omit || []).filter(x => typeof x === 'string').slice(0, 3); const wanted = {}; (sel.roles || []).forEach(r => wanted[r.id] = r.bullet_ids || []);
+  const omitted = [];
+  const experience = st.roles.map(r => {
+    const byId = Object.fromEntries(r.bullets.map(b => [b.id, b.text]));
+    let ids = [...new Set((wanted[r.id] || []).filter(id => byId[id] != null))]; Object.keys(byId).forEach(id => { if (!ids.includes(id)) ids.push(id); });
+    if (ids.length > 1) { const keep = ids.filter(id => !omit.includes(id)); if (keep.length) { ids.filter(id => !keep.includes(id)).forEach(id => omitted.push(byId[id])); ids = keep; } }
+    return { title: r.title, company: r.company, location: r.location, dates: r.dates, bullets: ids.map(id => byId[id]) };
+  });
+  const skById = Object.fromEntries(st.skills.map(k => [k.id, k])); const sk = [...new Set((sel.skill_order || []).filter(id => skById[id]))]; Object.keys(skById).forEach(id => { if (!sk.includes(id)) sk.push(id); });
+  const extra = [], edu = [], cert = [];
+  st.sections.forEach(s => { if (/educat/i.test(s.heading)) edu.push(...s.lines); else if (/certif|licen/i.test(s.heading)) cert.push(...s.lines); else extra.push({ heading: s.heading.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()), lines: s.lines }); });
+  return { headline: order.map(i => parts[i]).join(' · '), summary: (sel.summary || '').trim() || st.summary, experience, extra_sections: extra,
+    skills: sk.map(id => ({ group: skById[id].group, items: skById[id].items })), education: edu, certifications: cert,
+    changes: [...(sel.changes || []), ...omitted.map(o => 'Left out for this job: “' + o.slice(0, 80) + '…”')],
+    cover_letter: sel.cover_letter || { greeting: 'Dear Hiring Team,', paragraphs: [], closing: 'Best regards,' } };
+}
+const BANNED = ['i am writing to express', 'i am writing to apply', 'i am excited to apply', 'i am excited', 'thrilled', 'align perfectly', 'aligns perfectly', 'deeply admire', 'perfect fit', 'cutting-edge', 'proven track record', 'i am confident that',
+  'leverage', 'leveraging', 'passion for', 'passionate', 'seamless', 'robust', 'synergy', 'spearheaded', 'delve', 'testament to', 'fast-paced', 'dynamic team', 'tapestry'];
+const SENIORITY = ['senior', 'lead', 'led', 'staff', 'principal', 'head of', 'director', 'expert', 'mentor', 'mentored', 'managed a team'];
+const letterText = (cl) => ((cl || {}).paragraphs || []).join('\n\n');
+function localIssues(job, summary, letter) {
+  const vault = normText(DB.vault + ' ' + DB.extra); const out = [];
+  let text = normText(summary + ' ' + letterText(letter)); text = text.split(normText(job.title.replace(/\s*[,(].*$/, ''))).join(' ');
+  BANNED.forEach(b => { if (text.includes(b)) out.push({ quote: b, problem: 'cliché the candidate asked to avoid' }); });
+  SENIORITY.forEach(w => { const re = new RegExp('\\b' + esc(w) + '\\b'); if (re.test(text) && !re.test(vault)) out.push({ quote: w, problem: 'seniority or title word the vault never uses about the candidate' }); });
+  if (/[—–]|\s-\s/.test(letterText(letter))) out.push({ quote: '—', problem: 'the candidate never uses dashes; use commas, or parentheses for an aside' });
+  return out;
+}
+function truthCheck(job, kit) {
+  const n = (s) => String(s || '').replace(/,/g, '').replace(/[–—]/g, '-'); const vault = n(DB.vault + '\n' + DB.extra), posting = n(job.description + ' ' + job.title);
+  const grab = (t) => [...new Set((n(t).match(/\d[\d,]*(?:\.\d+)?(?:[KMB](?![a-z]))?[+%]?/g) || []).filter(x => parseFloat(x) >= 10 || /[KMB+%]$/.test(x)))];
+  let resume = kit.headline + '\n' + kit.summary; kit.experience.forEach(e => resume += '\n' + [e.title, e.dates, ...e.bullets].join('\n'));
+  kit.extra_sections.forEach(s => resume += '\n' + s.lines.join('\n')); kit.skills.forEach(s => resume += '\n' + s.items); resume += '\n' + kit.education.join('\n') + '\n' + kit.certifications.join('\n');
+  const warn = [];
+  grab(resume).forEach(x => { if (!vault.includes(x.replace(/[+%]$/, ''))) warn.push(`Resume mentions “${x}”, which isn't in your vault.`); });
+  grab(letterText(kit.cover_letter)).forEach(x => { const b = x.replace(/[+%]$/, ''); if (!vault.includes(b) && !posting.includes(b)) warn.push(`Cover letter mentions “${x}”, which isn't in your vault.`); });
+  localIssues(job, kit.summary, kit.cover_letter).forEach(i => warn.push(`“${i.quote}”: ${i.problem}.`));
+  return [...new Set(warn)];
+}
+function voiceBlock(job, line) {
+  const p = DB.prefs; let o = '\n=== VOICE ===\nCover letter tone: ' + p.tone + '\n';
+  if ((p.voice_sample || '').trim()) o += '\n=== VOICE SAMPLE (written by the candidate; copy the style, not the content) ===\n' + p.voice_sample.trim().slice(0, 3000) + '\n';
+  if ((p.home_area || '').trim()) o += '\nHOME AREA: ' + p.home_area.trim() + '\n';
+  if ((line || '').trim()) o += "\nCANDIDATE'S OWN LINE (include word for word): " + line.trim() + '\n';
+  return o;
+}
+const ownLineNote = (line) => (line || '').trim() ? "\n=== WRITTEN BY THE CANDIDATE THEMSELVES (never flag or change this sentence) ===\n" + line.trim() + '\n' : '';
+// Last mechanical pass: no dashes, and the candidate's own sentence is always there word for word.
+function finishLetter(cl, line) {
+  cl = JSON.parse(JSON.stringify(cl || { greeting: 'Dear Hiring Team,', paragraphs: [], closing: 'Best regards,' }));
+  cl.paragraphs = (cl.paragraphs || []).map(p => p.replace(/\s*[—–]\s*/g, ', ').replace(/\s+-\s+/g, ', ').replace(/,\s*,/g, ',').replace(/,\s*\./g, '.'));
+  const l = (line || '').trim();
+  if (l && !normText(cl.paragraphs.join(' ')).includes(normText(l))) { if (cl.paragraphs.length > 1) cl.paragraphs[1] = l + ' ' + cl.paragraphs[1]; else cl.paragraphs.push(l); }
+  return cl;
+}
+const LETTER_SYSTEM = `You write one cover letter for a real person who will send it under their own name. Use only facts from their career vault. Truth matters more than polish.
+${LETTER_RULES}`;
+// Rewrites only the cover letter (e.g. after the candidate adds their own line): write → fact-check → fix.
+async function writeLetter(job, line, onPhase) {
+  onPhase('Writing the letter');
+  let cl = (await gemini(LETTER_SYSTEM, vaultBlock() + '\n' + jobBlock(job) + voiceBlock(job, line), { type: 'OBJECT', properties: { cover_letter: KIT_SCHEMA.properties.cover_letter }, required: ['cover_letter'] }, 0.4)).cover_letter;
+  onPhase('Fact-checking against your vault');
+  let issues = localIssues(job, '', cl);
+  const chk = await gemini(VERIFY_SYSTEM, vaultBlock() + ownLineNote(line) + '\n' + jobBlock(job) + '\n=== COVER LETTER ===\n' + letterText(cl), VERIFY_SCHEMA, 0);
+  issues = issues.concat(chk.issues || []).filter(i => !(line && normText(line).includes(normText(i.quote))));
+  if (issues.length) {
+    onPhase('Removing unsupported claims');
+    const fixed = await gemini(REPAIR_SYSTEM, vaultBlock() + ownLineNote(line) + '\n=== PROBLEMS ===\n' + issues.map(i => `- "${i.quote}": ${i.problem}`).join('\n') + '\n\n=== SUMMARY ===\n(none)\n\n=== COVER LETTER (JSON) ===\n' + JSON.stringify(cl),
+      { type: 'OBJECT', properties: { summary: S, cover_letter: KIT_SCHEMA.properties.cover_letter }, required: ['cover_letter'] }, 0.2);
+    if (fixed.cover_letter && (fixed.cover_letter.paragraphs || []).length) cl = fixed.cover_letter;
+  }
+  return { cover_letter: finishLetter(cl, line), fixed: [...new Set(issues.map(i => i.quote))] };
+}
+async function makeKit(job, onPhase) {
+  onPhase('Reading your resume (once)'); const st = await readResume();
+  if (!st.roles.length) throw new Error('Could not read the roles in your resume. Check Profile.');
+  const m = DB.matches[job.id] || {}; const r = m.result || {};
+  let hints = r.core ? '\n=== FIT NOTES (for choosing emphasis only) ===\n' + r.core.map(x => `* ${x.focus}: ${x.fit}`).join('\n') + '\n' + (r.cons || []).map(x => '- gap: ' + x.gap).join('\n') + '\n' : '';
+  onPhase('Choosing emphasis and writing the letter');
+  const line = m.my_line || '';
+  const sel = await gemini(KIT_SYSTEM, structBlock(st) + (DB.extra.trim() ? '\n=== EXTRA TRUE FACTS ===\n' + DB.extra.trim() + '\n' : '') + '\n' + jobBlock(job) + hints + voiceBlock(job, line), KIT_SCHEMA, 0.3);
+  onPhase('Fact-checking against your vault');
+  let issues = localIssues(job, sel.summary || '', sel.cover_letter);
+  const chk = await gemini(VERIFY_SYSTEM, vaultBlock() + ownLineNote(line) + '\n' + jobBlock(job) + '\n=== SUMMARY ===\n' + (sel.summary || '') + '\n\n=== COVER LETTER ===\n' + letterText(sel.cover_letter), VERIFY_SCHEMA, 0);
+  issues = issues.concat(chk.issues || []).filter(i => !(line && normText(line).includes(normText(i.quote))));
+  if (issues.length) {
+    onPhase('Removing unsupported claims');
+    const fixed = await gemini(REPAIR_SYSTEM, vaultBlock() + '\n=== PROBLEMS ===\n' + issues.map(i => `- "${i.quote}": ${i.problem}`).join('\n') + '\n\n=== SUMMARY ===\n' + (sel.summary || '') + '\n\n=== COVER LETTER (JSON) ===\n' + JSON.stringify(sel.cover_letter),
+      { type: 'OBJECT', properties: { summary: S, cover_letter: KIT_SCHEMA.properties.cover_letter }, required: ['summary', 'cover_letter'] }, 0.2);
+    if (fixed.summary) sel.summary = fixed.summary; if (fixed.cover_letter && (fixed.cover_letter.paragraphs || []).length) sel.cover_letter = fixed.cover_letter;
+  }
+  sel.cover_letter = finishLetter(sel.cover_letter, line);
+  const kit = assembleKit(st, sel);
+  if (issues.length) kit.fixed = [...new Set(issues.map(i => i.quote))];
+  kit.warnings = truthCheck(job, kit); kit.made_at = nowStr();
+  return kit;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SEARCH RUN (collect → filter → AI checks)
+   ══════════════════════════════════════════════════════════════════ */
+function prefilter() {
+  const p = DB.prefs, inc = lines(p.include), exc = lines(p.exclude), loc = lines(p.locations);
+  for (const j of Object.values(DB.jobs)) {
+    if (!j.active || DB.matches[j.id]) continue;
+    let reason = 'pass';
+    if (j.source !== 'manual' && !p.sources[j.source]) reason = 'studio turned off';
+    else { const t = titlePasses(j.title, inc, exc); if (t !== true) reason = t; else if (!locationPasses(j.location, loc, p.allow_remote)) reason = 'outside your locations'; else if ((j.description || '').length < 200) reason = 'no job description'; }
+    DB.matches[j.id] = { status: 'new', prefilter: reason, score: null };
+  }
+}
+async function runSearch(log, opts = {}) {
+  RUN.ctl = new AbortController();
+  const run = { at: nowStr(), log: [], found: 0, new: 0, checked: 0, errors: 0 }; DB.runs.unshift(run); DB.runs = DB.runs.slice(0, 20);
+  const say = (m) => { run.log.push(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) + '  ' + m); log(run.log.join('\n')); commit(); };
+  if (!opts.skipCollect) {
+    const ctx = filterCtx();
+    const studios = Object.entries(STUDIOS).filter(([src]) => DB.prefs.sources[src]);
+    say('Looking at ' + studios.map(x => x[1]).join(', ') + '…');
+    const one = async ([src, label]) => {
+      const t0 = Date.now();
+      try {
+        const budget = new Promise((_, rej) => setTimeout(() => rej(new Error('took longer than 2.5 minutes; skipped this time')), 150000));
+        const stopP = new Promise((_, rej) => RUN.ctl.signal.addEventListener('abort', () => rej(Object.assign(new Error('Stopped'), { name: 'StopError' }))));
+        let jobs = await Promise.race([ADAPTERS[src](ctx), budget, stopP]).catch(async (e) => { if (e.name === 'StopError') throw e; const w = await webSearchJobs(src, label, ctx).catch(() => []); if (w.length) return w; throw e; });
+        if (!jobs.length && !stopped()) { const w = await webSearchJobs(src, label, ctx).catch(() => []); if (w.length) jobs = w; }
+        let fresh = 0; const seenNow = new Set();
+        for (const j of jobs) {
+          const id = jobId(src, j.ext_id); const old = DB.jobs[id]; seenNow.add(id);
+          if (!old) fresh++;
+          DB.jobs[id] = { ...(old || { first_seen: nowStr() }), ...j, id, source: src, description: (j.description || (old && old.description) || '').slice(0, 12000), salary: j.salary || (old && old.salary) || '', last_seen: nowStr(), active: true };
+        }
+        for (const j of Object.values(DB.jobs)) if (j.source === src && !seenNow.has(j.id) && Date.now() - new Date(j.last_seen) > 3 * 864e5) j.active = false;
+        DB.sources[src] = { ok: nowStr(), found: jobs.length, fresh };
+        run.found += jobs.length; run.new += fresh;
+        say(`${label}: ${jobs.length} design roles in LA/remote, ${fresh} new (${Math.round((Date.now() - t0) / 1000)}s)`);
+      } catch (e) {
+        if (e.name === 'StopError') { say(`${label}: stopped`); return; }
+        DB.sources[src] = { ...(DB.sources[src] || {}), err: nowStr(), error: e.message }; run.errors++;
+        say(`${label}: couldn't reach it this time (${e.message})`);
+      }
+    };
+    // a few studios at a time: faster, without flooding the free readers
+    const queue = [...studios]; await Promise.all([0, 1, 2, 3].map(async () => { while (queue.length && !stopped()) await one(queue.shift()); }));
+    if (stopped()) { prefilter(); say('Stopped.'); commit(); return run; }
+    DB.lastCollect = nowStr();
+  }
+  prefilter(); commit();
+  if (!DB.vault.trim()) { say('Add your resume in Profile to get match scores.'); return run; }
+  const queue = Object.values(DB.jobs).filter(j => j.active && DB.matches[j.id]?.prefilter === 'pass' && DB.matches[j.id].score == null)
+    .sort((a, b) => String(b.posted_at || b.first_seen).localeCompare(String(a.posted_at || a.first_seen)));
+  const limit = Math.max(1, +DB.prefs.checks_per_search || 15);
+  if (queue.length) say(`Checking ${Math.min(limit, queue.length)} of ${queue.length} new jobs with AI…`);
+  for (const job of queue.slice(0, limit)) {
+    if (stopped()) { say('Stopped.'); break; }
+    try {
+      const res = await scoreJob(job);
+      Object.assign(DB.matches[job.id], { score: res.score, result: res, scored_at: nowStr() }); run.checked++;
+      say(`${res.score}%  ${job.company.split(' · ')[0]} — ${job.title}`);
+    } catch (e) { if (stopped()) { say('Stopped.'); break; } say(`Couldn't check ${job.title}: ${e.message}`); if (/needs a key|rate limit|refused/i.test(e.message)) break; }
+  }
+  const left = queue.length - run.checked; if (left > 0) say(`${left} more waiting. Press Find jobs again to keep going.`);
+  say('Done.'); return run;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   WORD FILES (.docx) and resume import
+   ══════════════════════════════════════════════════════════════════ */
+const xe = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function wRun(text, o = {}) {
+  let rpr = (o.b ? '<w:b/>' : '') + (o.color ? `<w:color w:val="${o.color}"/>` : '') + (o.sz ? `<w:sz w:val="${o.sz}"/><w:szCs w:val="${o.sz}"/>` : '') + (o.caps ? '<w:caps/>' : '') + (o.spacing ? `<w:spacing w:val="${o.spacing}"/>` : '');
+  const x = String(text).split('\t').map((p, i) => (i ? '<w:tab/>' : '') + `<w:t xml:space="preserve">${xe(p)}</w:t>`).join('');
+  return `<w:r>${rpr ? '<w:rPr>' + rpr + '</w:rPr>' : ''}${x}</w:r>`;
+}
+function wP(runs, o = {}) {
+  let ppr = (o.border ? '<w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="9CA3AF"/></w:pBdr>' : '') + (o.tab ? '<w:tabs><w:tab w:val="right" w:pos="10080"/></w:tabs>' : '')
+    + `<w:spacing w:before="${o.before || 0}" w:after="${o.after == null ? 40 : o.after}"/>` + (o.bullet ? '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:ind w:left="300" w:hanging="200"/>' : '');
+  return `<w:p><w:pPr>${ppr}</w:pPr>${runs}</w:p>`;
+}
+const contactLine = (c) => [c.city, c.phone, c.email, ...String(c.links || '').split(/[\n,]+/).map(s => s.trim())].filter(Boolean).join('  ·  ');
+function labelRuns(l) { const m = l.match(/^([^:]{2,40}):\s(.+)$/); return m ? wRun(m[1] + ': ', { b: 1, sz: 19 }) + wRun(m[2], { sz: 19 }) : wRun(l, { sz: 19 }); }
+function resumeXml(kit, c) {
+  const H = (t) => wP(wRun(t, { b: 1, caps: 1, sz: 20, spacing: 20, color: '111827' }), { border: 1, before: 160, after: 60 });
+  let b = wP(wRun((c.name || '').toUpperCase(), { b: 1, sz: 34, spacing: 20 }), { after: 20 }) + wP(wRun(kit.headline, { sz: 21, color: '374151' }), { after: 20 }) + wP(wRun(contactLine(c), { sz: 18, color: '4B5563' }), { after: 120 });
+  if (kit.summary) b += H('Summary') + wP(wRun(kit.summary, { sz: 20 }));
+  b += H('Experience');
+  kit.experience.forEach(e => { b += wP(wRun(e.title, { b: 1, sz: 20 }), { before: 100, after: 0 }) + wP(wRun(e.company + (e.location ? ' — ' + e.location : ''), { sz: 19, color: '4B5563' }) + wRun('\t' + e.dates, { sz: 19, color: '4B5563' }), { tab: 1 }); e.bullets.forEach(x => b += wP(wRun(x, { sz: 19 }), { bullet: 1, after: 20 })); });
+  kit.extra_sections.forEach(s => { b += H(s.heading); s.lines.forEach(l => b += wP(labelRuns(l), { after: 30 })); });
+  if (kit.skills.length) { b += H('Skills'); kit.skills.forEach(s => b += wP(wRun(s.group + ': ', { b: 1, sz: 19 }) + wRun(s.items, { sz: 19 }), { after: 30 })); }
+  if (kit.education.length) { b += H('Education'); kit.education.forEach(l => b += wP(wRun(l, { sz: 19 }), { after: 20 })); }
+  if (kit.certifications.length) { b += H('Certifications'); kit.certifications.forEach(l => b += wP(labelRuns(l), { after: 20 })); }
+  return b;
+}
+function letterXml(kit, c, job) {
+  const cl = kit.cover_letter;
+  let b = wP(wRun(c.name, { b: 1, sz: 28 }), { after: 20 }) + wP(wRun(contactLine(c), { sz: 18, color: '4B5563' }), { after: 280 }) + wP(wRun(new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }), { sz: 21 }), { after: 200 })
+    + wP(wRun(job.company.split(' · ')[0] + ' — ' + job.title, { sz: 21, b: 1 }), { after: 200 }) + wP(wRun(cl.greeting, { sz: 21 }), { after: 160 });
+  cl.paragraphs.forEach(p => b += wP(wRun(p, { sz: 21 }), { after: 160 }));
+  return b + wP(wRun(cl.closing, { sz: 21 }), { before: 80, after: 60 }) + wP(wRun(c.name, { sz: 21 }));
+}
+async function downloadDocx(bodyXml, filename) {
+  const z = new JSZip(); const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  z.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>');
+  z.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  z.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>');
+  z.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${bodyXml}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="864" w:right="1080" w:bottom="864" w:left="1080" w:header="0" w:footer="0" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+  z.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri" w:eastAsia="Calibri"/><w:sz w:val="20"/><w:color w:val="1F2937"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="40" w:line="252" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`);
+  z.file('word/numbering.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering ${W}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="300" w:hanging="200"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`);
+  const blob = await z.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+}
+async function docxToText(file) {
+  const z = await JSZip.loadAsync(file); const xml = await z.file('word/document.xml')?.async('string');
+  if (!xml) throw new Error('No text found in that .docx');
+  return decodeEntities(xml.replace(/<w:tab\/>/g, '\t').replace(/<\/w:p>/g, '\n').replace(/<w:br[^>]*\/>/g, '\n').replace(/<[^>]+>/g, '')).replace(/\n{3,}/g, '\n\n').trim();
+}
+const slug = (s) => String(s || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+function printHtml(title, inner) {
+  const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'; document.body.appendChild(f);
+  const css = [...document.querySelectorAll('style')].map(s => s.outerHTML).join('');
+  f.contentDocument.write(`<!doctype html><html><head><title>${title}</title>${css}<style>@page{size:letter;margin:.5in .6in} body{background:#fff;font-family:Calibri,Carlito,Inter,sans-serif} .paper{box-shadow:none!important}</style></head><body>${inner}</body></html>`);
+  f.contentDocument.close(); setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) {} setTimeout(() => f.remove(), 2000); }, 600);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   UI
+   ══════════════════════════════════════════════════════════════════ */
+const STATUSES = [['new', 'New'], ['saved', 'Saved'], ['applied', 'Applied'], ['interview', 'Interview'], ['offer', 'Offer'], ['closed', 'Closed'], ['hidden', 'Hidden']];
+const STATUS_LABEL = Object.fromEntries(STATUSES);
+function tone(s) {
+  if (s == null) return { ring: '#d6d3cb', text: 'text-stone-500', bg: 'bg-stone-100', label: 'Not checked' };
+  if (s >= 85) return { ring: '#3f8f2b', text: 'text-[#2d6b1e]', bg: 'bg-[#e7f5dd]', label: 'Strong fit' };
+  if (s >= 70) return { ring: '#7fb321', text: 'text-[#4b6d10]', bg: 'bg-[#eef7d6]', label: 'Good fit' };
+  if (s >= 50) return { ring: '#d39b1d', text: 'text-[#8a5d00]', bg: 'bg-[#fbf0d4]', label: 'Stretch' };
+  return { ring: '#b9b4a9', text: 'text-stone-600', bg: 'bg-stone-100', label: 'Long shot' };
+}
+const inputCls = 'w-full rounded-xl border border-line bg-white px-3 py-2 text-sm outline-none focus:border-ink focus:ring-2 focus:ring-ink/10';
+
+function Ring({ score, size = 52 }) {
+  const t = tone(score), r = size / 2 - 4, c = 2 * Math.PI * r, v = score == null ? 0 : score / 100;
+  return (<div className="relative shrink-0" style={{ width: size, height: size }}>
+    <svg width={size} height={size} className="-rotate-90"><circle cx={size / 2} cy={size / 2} r={r} stroke="#ebe8e1" strokeWidth="4" fill="none" /><circle cx={size / 2} cy={size / 2} r={r} stroke={t.ring} strokeWidth="4" fill="none" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - v)} /></svg>
+    <div className="absolute inset-0 grid place-items-center"><span className={'font-semibold tabular-nums ' + (size > 60 ? 'text-xl' : 'text-[13px]')}>{score == null ? '–' : score}<span className="text-[10px] opacity-60">{score == null ? '' : '%'}</span></span></div>
+  </div>);
+}
+function Btn({ children, kind = 'default', className = '', ...p }) {
+  const k = { primary: 'bg-ink text-white hover:bg-black disabled:bg-stone-400', lime: 'bg-lime text-ink hover:brightness-95 disabled:opacity-50', default: 'bg-white border border-line text-ink hover:border-stone-400 disabled:opacity-50', ghost: 'text-stone-600 hover:text-ink hover:bg-black/5 disabled:opacity-40' }[kind];
+  return <button {...p} className={'inline-flex items-center justify-center gap-1.5 rounded-full px-4 h-9 text-sm font-medium transition ' + k + ' ' + className}>{children}</button>;
+}
+const Pill = ({ children, className = '' }) => <span className={'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ' + className}>{children}</span>;
+const Spinner = ({ className = '' }) => <span className={'inline-block w-4 h-4 border-2 border-current border-r-transparent rounded-full animate-spin ' + className} />;
+function Field({ label, hint, children }) { return <label className="block"><span className="block text-[13px] font-medium text-stone-700 mb-1">{label}</span>{children}{hint && <span className="block text-xs text-stone-500 mt-1">{hint}</span>}</label>; }
+function Icon({ name, className = 'w-4 h-4' }) {
+  const p = { check: <path d="M5 12.5l4.5 4.5L19 7.5" />, x: <path d="M6 6l12 12M18 6L6 18" />, alert: <><path d="M12 8v5" /><path d="M12 16.5v.5" /><path d="M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></>,
+    ext: <><path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" /></>, download: <><path d="M12 4v11" /><path d="M7 10l5 5 5-5" /><path d="M5 20h14" /></>,
+    print: <><path d="M7 9V4h10v5" /><rect x="4" y="9" width="16" height="7" rx="2" /><path d="M7 14h10v6H7z" /></>, copy: <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a1 1 0 011-1h10" /></>,
+    edit: <><path d="M4 20h4L19 9l-4-4L4 16v4z" /><path d="M13.5 6.5l4 4" /></>, plus: <path d="M12 5v14M5 12h14" />, search: <><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4 4" /></>,
+    sparkle: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" />, bookmark: <path d="M6 4h12v16l-6-4-6 4V4z" />, back: <path d="M15 5l-7 7 7 7" />,
+    eyeoff: <><path d="M3 3l18 18" /><path d="M10.6 5.1A9.7 9.7 0 0112 5c5 0 9 4.5 10 7-.4 1-1.3 2.4-2.6 3.7M6.6 6.6C4.3 8 2.7 10.2 2 12c1 2.5 5 7 10 7 1.6 0 3.1-.4 4.4-1.1" /></> }[name];
+  return <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{p}</svg>;
+}
+function Logo() { return <div className="flex items-center gap-2"><span className="grid place-items-center rounded-[9px] bg-ink w-7 h-7"><svg viewBox="0 0 32 32" className="w-full h-full"><path d="M9 17l4.5 4.5L23 11" stroke="#c6f36b" strokeWidth="3.2" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg></span><span className="font-semibold tracking-tight text-[17px] hidden sm:inline">Shortlist</span></div>; }
+function Card({ title, desc, children }) { return <section className="bg-white rounded-3xl border border-line p-5 sm:p-6"><h2 className="font-semibold">{title}</h2>{desc ? <p className="text-sm text-stone-500 mt-0.5 mb-4">{desc}</p> : <div className="h-3" />}{children}</section>; }
+
+function App() {
+  const db = useDB();
+  useEffect(() => { // first open of a copy with a built-in resume: save it and read it right away
+    if (DB.vault.trim() && !(DB.struct && DB.struct.hash === hashId(DB.vault))) { readResumeLocal(); }
+    try { if (!localStorage.getItem(STORE_KEY)) commit(); } catch (e) {}
+  }, []);
+  const [tab, setTab] = useState(db.vault.trim() ? 'matches' : 'profile');
+  const [openId, setOpenId] = useState(null);
+  const [toast, setToast] = useState(''); const tRef = useRef();
+  const say = useCallback((m) => { setToast(m); clearTimeout(tRef.current); tRef.current = setTimeout(() => setToast(''), 3400); }, []);
+  const [running, setRunning] = useState(false); const [log, setLog] = useState(''); const stopRef = useRef(false);
+  const find = async (opts = {}) => {
+    if (running) return; setRunning(true); stopRef.current = false; setLog('');
+    try { const r = await runSearch(setLog, { ...opts, stop: () => stopRef.current }); say(`${r.found} roles found, ${r.new} new, ${r.checked} checked`); } catch (e) { say(e.message); }
+    setRunning(false);
+  };
+  const nav = [['profile', 'Profile'], ['search', 'Search'], ['matches', 'Matches'], ['tracker', 'Tracker']];
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-line">
+        <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-4">
+          <Logo />
+          <nav className="flex gap-0.5 sm:gap-1 overflow-x-auto scroll-thin min-w-0">{nav.map(([k, l]) => <button key={k} onClick={() => { setTab(k); setOpenId(null); }} className={'px-2.5 sm:px-3 h-8 rounded-full text-sm font-medium whitespace-nowrap ' + (tab === k ? 'bg-ink text-white' : 'text-stone-600 hover:text-ink hover:bg-black/5')}>{l}</button>)}</nav>
+          <Btn kind="primary" className="ml-auto h-8 px-3 shrink-0" onClick={() => { setTab('search'); find(); }} disabled={running}>{running ? <Spinner /> : <Icon name="search" />}<span className="hidden sm:inline">{running ? 'Searching…' : 'Find jobs'}</span></Btn>
+        </div>
+      </header>
+      {!db.vault.trim() && tab !== 'profile' && <div className="max-w-6xl mx-auto px-4 mt-4"><div className="rounded-2xl bg-ink text-white p-4 flex flex-wrap items-center gap-3"><Icon name="sparkle" className="w-5 h-5 text-lime" /><span className="text-sm">Add your resume in Profile so matches and tailored kits can start.</span><Btn kind="lime" className="ml-auto h-8" onClick={() => setTab('profile')}>Add resume</Btn></div></div>}
+      <main className="max-w-6xl mx-auto px-4 pb-24">
+        {tab === 'matches' && <Matches open={setOpenId} say={say} goSearch={() => { setTab('search'); find(); }} />}
+        {tab === 'tracker' && <Tracker open={setOpenId} />}
+        {tab === 'profile' && <Profile say={say} />}
+        {tab === 'search' && <Search running={running} log={log} find={find} stop={() => { stopRef.current = true; stopEverything(); say('Stopping…'); }} say={say} />}
+      </main>
+      {openId && <JobDrawer id={openId} onClose={() => setOpenId(null)} say={say} />}
+      {toast && <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[80] fade-in rounded-full bg-ink text-white text-sm px-4 py-2.5 shadow-lg max-w-[92vw]">{toast}</div>}
+    </div>
+  );
+}
+
+function Matches({ open, say, goSearch }) {
+  const db = useDB();
+  const [min, setMin] = useState(db.prefs.min_score); const [studio, setStudio] = useState('all'); const [q, setQ] = useState(''); const [hidden, setHidden] = useState(false); const [adding, setAdding] = useState(false);
+  const all = Object.values(db.jobs).map(j => ({ ...j, ...(db.matches[j.id] || {}) })).filter(m => m.score != null || (m.status && m.status !== 'new'))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
+  const list = all.filter(m => (hidden ? m.status === 'hidden' : m.status !== 'hidden') && (min === 0 || (m.score ?? 0) >= min || (m.score == null && m.source === 'manual')) && (studio === 'all' || m.source === studio) && (!q || (m.title + ' ' + m.company).toLowerCase().includes(q.toLowerCase())));
+  const above = all.filter(m => (m.score ?? 0) >= db.prefs.min_score && m.status !== 'hidden');
+  const pending = Object.values(db.jobs).filter(j => j.active && db.matches[j.id]?.prefilter === 'pass' && db.matches[j.id].score == null).length;
+  return (
+    <div className="fade-in">
+      <section className="pt-8 pb-6 flex flex-wrap items-end gap-6">
+        <div>
+          <p className="text-sm text-stone-500">{db.lastCollect ? 'Last search ' + ago(db.lastCollect) + ' · ' + Object.values(db.jobs).filter(j => j.active && j.source !== 'manual').length + ' open design roles across ' + Object.keys(STUDIOS).length + ' companies' : 'No search yet.'}</p>
+          <h1 className="font-serif text-[44px] leading-[1.05] mt-1">{above.length ? `${above.length} job${above.length > 1 ? 's' : ''} worth your time` : 'Nothing above your bar yet'}</h1>
+        </div>
+        <div className="flex gap-6 ml-auto text-sm">
+          <div><div className="text-2xl font-semibold tabular-nums">{above.filter(m => m.kit && !['applied', 'interview', 'offer', 'closed'].includes(m.status)).length}</div><div className="text-stone-500 text-xs">kits ready</div></div>
+          <div><div className="text-2xl font-semibold tabular-nums">{all.filter(m => m.status === 'applied').length}</div><div className="text-stone-500 text-xs">applied</div></div>
+          <button onClick={goSearch} className="text-left"><div className="text-2xl font-semibold tabular-nums">{pending}</div><div className="text-stone-500 text-xs underline">waiting for AI check</div></button>
+        </div>
+      </section>
+      <div className="flex flex-wrap items-center gap-2 pb-4 border-b border-line">
+        <div className="flex rounded-full bg-white border border-line p-0.5">{[[db.prefs.min_score, db.prefs.min_score + '%+'], [50, '50%+'], [0, 'All']].filter((v, i, a) => a.findIndex(x => x[0] === v[0]) === i).map(([v, l]) => <button key={l} onClick={() => setMin(v)} className={'px-3 h-8 rounded-full text-sm font-medium ' + (min === v ? 'bg-ink text-white' : 'text-stone-600')}>{l}</button>)}</div>
+        <select value={studio} onChange={e => setStudio(e.target.value)} className="h-9 rounded-full border border-line bg-white px-3 text-sm"><option value="all">All studios</option>{[...new Set(all.map(m => m.source))].map(s => <option key={s} value={s}>{SHORT[s]}</option>)}</select>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search title or team" className="h-9 rounded-full border border-line bg-white px-4 text-sm w-full sm:w-56 outline-none focus:border-ink" />
+        <button onClick={() => setHidden(!hidden)} className="text-sm text-stone-500 hover:text-ink px-2">{hidden ? 'Back to matches' : 'Hidden'}</button>
+        <Btn className="ml-auto" onClick={() => setAdding(true)}><Icon name="plus" />Add a job</Btn>
+      </div>
+      <div className="mt-4 space-y-3">
+        {list.length === 0 && <div className="text-center py-20 text-stone-500"><p className="font-serif text-2xl text-ink">No jobs here</p><p className="text-sm mt-1">{all.length && min > 0 ? 'Try a lower score filter to see stretch roles.' : 'Press Find jobs, or add a job you found yourself.'}</p></div>}
+        {list.map(m => <MatchCard key={m.id} m={m} onOpen={() => open(m.id)} />)}
+      </div>
+      {adding && <AddJob onClose={() => setAdding(false)} onAdded={(id) => { setAdding(false); open(id); }} />}
+    </div>
+  );
+}
+function MatchCard({ m, onOpen }) {
+  const t = tone(m.score); const r = m.result || {};
+  return (
+    <button onClick={onOpen} className="w-full text-left bg-white rounded-2xl border border-line hover:border-stone-400 hover:shadow-sm transition p-4 sm:p-5 flex gap-4 items-start group">
+      <Ring score={m.score} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><h3 className="font-semibold text-[15px] leading-snug group-hover:underline underline-offset-2">{m.title}</h3>
+          {m.status && m.status !== 'new' && <Pill className="bg-ink text-white">{STATUS_LABEL[m.status]}</Pill>}
+          {m.kit && !['applied', 'interview', 'offer', 'closed'].includes(m.status) && <Pill className="bg-lime text-ink">Kit ready</Pill>}
+          {!m.active && <Pill className="bg-stone-200 text-stone-600">Closed</Pill>}</div>
+        <p className="text-sm text-stone-600 mt-0.5">{m.company} · {m.location}{m.posted_at ? ' · ' + ago(m.posted_at) : ''}{m.salary ? ' · ' + m.salary : ''}</p>
+        {r.summary && <p className="text-sm mt-2 text-stone-800">{r.summary}</p>}
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          {(r.pros || []).slice(0, 3).map((p, i) => <span key={'p' + i} className="inline-flex items-center gap-1 text-xs rounded-full bg-[#eef7d6] text-[#3e5c0c] px-2.5 py-1"><Icon name="check" className="w-3 h-3" />{p.point}</span>)}
+          {(r.cons || []).slice(0, 2).map((c, i) => <span key={'c' + i} className="inline-flex items-center gap-1 text-xs rounded-full bg-[#fbf0d4] text-[#7a5200] px-2.5 py-1"><Icon name="alert" className="w-3 h-3" />{c.gap}</span>)}
+        </div>
+      </div>
+      <span className={'hidden sm:inline-flex text-xs font-medium rounded-full px-2.5 py-1 ' + t.bg + ' ' + t.text}>{t.label}</span>
+    </button>
+  );
+}
+function Modal({ title, children, onClose }) {
+  return (<div className="fixed inset-0 z-[60] bg-black/30 grid place-items-center p-4" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto scroll-thin bg-paper rounded-3xl p-6 fade-in"><div className="flex items-center mb-4"><h2 className="font-serif text-2xl">{title}</h2><button onClick={onClose} className="ml-auto p-2 -m-2 text-stone-500 hover:text-ink"><Icon name="x" className="w-5 h-5" /></button></div>{children}</div></div>);
+}
+function AddJob({ onClose, onAdded }) {
+  const [f, setF] = useState({ title: '', company: '', location: '', url: '', salary: '', description: '' }); const set = k => e => setF({ ...f, [k]: e.target.value });
+  const submit = (e) => {
+    e.preventDefault(); if (f.description.length < 200) return;
+    const ext = hashId(f.company + f.title + f.description); const id = jobId('manual', ext);
+    DB.jobs[id] = { ...f, id, ext_id: ext, source: 'manual', posted_at: today(), first_seen: nowStr(), last_seen: nowStr(), active: true };
+    DB.matches[id] = { status: 'saved', prefilter: 'pass', score: null }; commit(); onAdded(id);
+  };
+  return (<Modal onClose={onClose} title="Add a job you found"><form onSubmit={submit} className="space-y-3">
+    <p className="text-sm text-stone-600">Found a role on LinkedIn, Indeed or through a referral? Paste it to get a match score and a tailored kit.</p>
+    <div className="grid sm:grid-cols-2 gap-3"><Field label="Job title"><input className={inputCls} value={f.title} onChange={set('title')} required /></Field><Field label="Company"><input className={inputCls} value={f.company} onChange={set('company')} required /></Field><Field label="Location"><input className={inputCls} value={f.location} onChange={set('location')} /></Field><Field label="Pay (optional)"><input className={inputCls} value={f.salary} onChange={set('salary')} /></Field></div>
+    <Field label="Link to the posting"><input className={inputCls} value={f.url} onChange={set('url')} placeholder="https://" /></Field>
+    <Field label="Full job description" hint="At least a few paragraphs."><textarea className={inputCls + ' h-48 text-[12.5px]'} value={f.description} onChange={set('description')} required /></Field>
+    <div className="flex justify-end gap-2"><Btn type="button" kind="ghost" onClick={onClose}>Cancel</Btn><Btn kind="primary">Add and open</Btn></div></form></Modal>);
+}
+
+function JobDrawer({ id, onClose, say }) {
+  const db = useDB(); const job = db.jobs[id]; const m = db.matches[id] || (db.matches[id] = { status: 'new', prefilter: 'pass', score: null });
+  const [tab, setTab] = useState('fit'); const [busy, setBusy] = useState(''); const [phase, setPhase] = useState(''); const [ask, setAsk] = useState(false);
+  useEffect(() => { const k = e => e.key === 'Escape' && onClose(); addEventListener('keydown', k); return () => removeEventListener('keydown', k); }, []);
+  useEffect(() => { if (job && m.score == null && (job.description || '').length > 200 && DB.vault.trim()) runScore(); }, [id]);
+  if (!job) return null;
+  const setStatus = (s, msg) => { m.status = s; commit(); if (msg) say(msg); };
+  async function runScore() { setBusy('score'); try { const r = await scoreJob(job); Object.assign(m, { score: r.score, result: r, scored_at: nowStr(), prefilter: 'pass' }); commit(); } catch (e) { say(e.message); } setBusy(''); }
+  async function runKit() { if (!DB.vault.trim()) return say('Add your resume in Profile first.'); setBusy('kit'); try { m.kit = await makeKit(job, setPhase); commit(); say('Resume and cover letter are ready'); } catch (e) { say(e.message); } setBusy(''); setPhase(''); }
+  const saveKit = (kit) => { kit.warnings = truthCheck(job, kit); kit.edited = true; m.kit = kit; commit(); say('Saved'); };
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/25" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <aside className="drawer w-full max-w-[860px] h-full bg-paper flex flex-col shadow-2xl">
+        <div className="px-5 sm:px-8 pt-5 pb-4 border-b border-line bg-white">
+          <div className="flex items-center gap-2 mb-3"><button onClick={onClose} className="inline-flex items-center gap-1 text-sm text-stone-500 hover:text-ink -ml-1"><Icon name="back" />Back</button><span className="ml-auto text-xs text-stone-500">{SHORT[job.source]}{job.posted_at ? ' · posted ' + ago(job.posted_at) : ''}</span></div>
+          <div className="flex gap-4 items-start">{busy === 'score' ? <div className="w-[72px] h-[72px] grid place-items-center"><Spinner /></div> : <Ring score={m.score} size={72} />}<div className="min-w-0"><h2 className="font-serif text-[28px] leading-tight">{job.title}</h2><p className="text-sm text-stone-600 mt-1">{job.company} · {job.location}{job.salary ? ' · ' + job.salary : ''}</p></div></div>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <Btn kind="primary" disabled={!job.url} onClick={() => { window.open(job.url, '_blank', 'noopener'); setAsk(true); }}><Icon name="ext" />Apply on {job.source === 'manual' ? 'site' : SHORT[job.source]}</Btn>
+            {!['saved', 'applied', 'interview', 'offer'].includes(m.status) && <Btn onClick={() => setStatus('saved', 'Saved to your tracker')}><Icon name="bookmark" />Save</Btn>}
+            <select value={m.status} onChange={e => setStatus(e.target.value, 'Moved to ' + STATUS_LABEL[e.target.value])} className="h-9 rounded-full border border-line bg-white px-3 text-sm">{STATUSES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+            {m.status !== 'hidden' && <Btn kind="ghost" onClick={() => { setStatus('hidden', 'Hidden'); onClose(); }}><Icon name="eyeoff" />Not for me</Btn>}
+          </div>
+          {ask && m.status !== 'applied' && <div className="mt-3 rounded-2xl bg-lime/40 border border-lime p-3 flex flex-wrap items-center gap-2 fade-in"><span className="text-sm">Did you submit the application?</span><Btn kind="primary" className="h-8 ml-auto" onClick={() => { setAsk(false); setStatus('applied', 'Marked as applied. Good luck!'); }}>Yes, mark applied</Btn><Btn kind="ghost" className="h-8" onClick={() => setAsk(false)}>Not yet</Btn></div>}
+          <div className="flex gap-1 mt-5 -mb-4">{[['fit', 'Fit'], ['resume', 'Resume'], ['letter', 'Cover letter'], ['posting', 'Posting']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={'px-3 pb-3 pt-1 text-sm font-medium border-b-2 ' + (tab === k ? 'border-ink text-ink' : 'border-transparent text-stone-500 hover:text-ink')}>{l}{(k === 'resume' || k === 'letter') && m.kit ? <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-[#7fb321] align-middle" /> : null}</button>)}</div>
+        </div>
+        <div className="flex-1 overflow-y-auto scroll-thin px-5 sm:px-8 py-6">
+          {tab === 'fit' && <FitTab m={m} busy={busy} onScore={runScore} onKit={() => { setTab('resume'); if (!m.kit) runKit(); }} />}
+          {(tab === 'resume' || tab === 'letter') && (m.kit ? (tab === 'resume' ? <ResumeTab job={job} kit={m.kit} onSave={saveKit} onRegen={runKit} busy={busy} /> : <LetterTab job={job} m={m} kit={m.kit} onSave={saveKit} say={say} />)
+            : <div className="text-center py-16">{busy === 'kit' ? <><Spinner className="text-stone-500" /><p className="text-sm text-stone-600 mt-3">{phase || 'Starting'}…</p><p className="text-xs text-stone-400 mt-1">Usually under a minute.</p></> : <><p className="font-serif text-2xl">No kit yet</p><p className="text-sm text-stone-600 mt-1 mb-4 max-w-md mx-auto">Shortlist puts your resume together for this posting from your own words, and drafts a fact-checked cover letter.</p><Btn kind="primary" onClick={runKit}><Icon name="sparkle" />Write my resume + cover letter</Btn></>}</div>)}
+          {tab === 'posting' && <div className="bg-white rounded-2xl border border-line p-6"><div className="whitespace-pre-wrap text-[14px] leading-relaxed text-stone-800">{job.description || 'No description saved.'}</div>{job.url && <a href={job.url} target="_blank" rel="noopener" className="inline-flex items-center gap-1 mt-5 text-sm font-medium underline underline-offset-2">Open the original posting <Icon name="ext" /></a>}</div>}
+        </div>
+      </aside>
+    </div>
+  );
+}
+const ReqBadge = ({ status }) => <span className={'shrink-0 w-[62px] text-center text-[11px] font-semibold rounded-full py-1 ' + ({ Strong: 'bg-[#e7f5dd] text-[#2d6b1e]', Partial: 'bg-[#fbf0d4] text-[#8a5d00]', Gap: 'bg-[#fbe4e1] text-[#9b2c1f]' }[status] || 'bg-stone-100')}>{status}</span>;
+function FitTab({ m, busy, onScore, onKit }) {
+  const r = m.result;
+  if (!r) return <div className="text-center py-16">{busy === 'score' ? <><Spinner className="text-stone-500" /><p className="text-sm text-stone-600 mt-3">Comparing this posting with your vault…</p></> : <><p className="font-serif text-2xl">Not checked yet</p><p className="text-sm text-stone-600 mt-1 mb-4">{m.prefilter && m.prefilter !== 'pass' ? 'Skipped by your filters: ' + m.prefilter + '.' : 'Check the fit to see pros, gaps and requirements.'}</p><Btn kind="primary" onClick={onScore}><Icon name="sparkle" />Check my fit</Btn></>}</div>;
+  const t = tone(r.score); const counts = { Strong: 0, Partial: 0, Gap: 0 }; (r.requirements || []).forEach(x => counts[x.status] = (counts[x.status] || 0) + 1);
+  return (
+    <div className="space-y-6 fade-in">
+      <div className={'rounded-2xl p-5 ' + t.bg}><div className="flex flex-wrap items-center gap-2 mb-1"><span className={'text-sm font-semibold ' + t.text}>{r.score}% · {t.label}</span>{r.level_fit && <Pill className="bg-white/70 text-stone-700">{({ 'Job is more senior than the candidate': 'More senior than you', 'Matches the candidate': 'Your level', 'Job is more junior than the candidate': 'Below your level' })[r.level_fit] || r.level_fit}</Pill>}</div><p className="text-[15px] leading-relaxed">{r.summary}</p>{r.score >= 50 && !m.kit && <Btn kind="primary" className="mt-4" onClick={onKit}><Icon name="sparkle" />Write my resume + cover letter</Btn>}</div>
+      {(r.core || []).length > 0 && <section className="bg-white rounded-2xl border border-line p-5"><h3 className="text-sm font-semibold mb-3">What this job is really about</h3><div className="space-y-2.5">{r.core.map((c, i) => <div key={i} className="flex gap-3 items-start"><ReqBadge status={c.fit} /><div><p className="text-sm font-medium">{c.focus}</p><p className="text-[13px] text-stone-500">{c.why}</p></div></div>)}</div>{r.capped_from != null && <p className="text-xs text-stone-500 mt-3">The AI first said {r.capped_from}%. Lowered because {(r.capped_why || ['a core part of the job is a gap']).join(', ')}.</p>}</section>}
+      <div className="grid md:grid-cols-2 gap-4">
+        <section className="bg-white rounded-2xl border border-line p-5"><h3 className="text-sm font-semibold mb-3">Why you fit</h3><ul className="space-y-3">{(r.pros || []).map((p, i) => <li key={i}><p className="text-sm font-medium">{p.point}</p><p className="text-[13px] text-stone-600 mt-0.5">{p.evidence}</p></li>)}</ul></section>
+        <section className="bg-white rounded-2xl border border-line p-5"><h3 className="text-sm font-semibold mb-3">Gaps and how to handle them</h3><ul className="space-y-3">{(r.cons || []).map((c, i) => <li key={i}><p className="text-sm font-medium">{c.gap}</p><p className="text-[13px] text-stone-600 mt-0.5"><b className="text-stone-800">Tip: </b>{c.tip}</p></li>)}</ul></section>
+      </div>
+      <section className="bg-white rounded-2xl border border-line overflow-hidden"><div className="flex flex-wrap items-center gap-3 px-5 pt-5 pb-3"><h3 className="text-sm font-semibold">Requirements checklist</h3><span className="text-xs text-stone-500">{counts.Strong} strong · {counts.Partial} partial · {counts.Gap} gap</span></div>
+        <div className="divide-y divide-line">{(r.requirements || []).map((q, i) => <div key={i} className="px-5 py-3 flex gap-3 items-start"><ReqBadge status={q.status} /><div><p className="text-sm">{q.req} {q.kind === 'Preferred' && <span className="text-xs text-stone-500">· preferred</span>}</p><p className="text-[13px] text-stone-500 mt-0.5">{q.evidence}</p></div></div>)}</div></section>
+      {(r.flags || []).length > 0 && <section><h3 className="text-sm font-semibold mb-2">Good to know</h3><div className="flex flex-wrap gap-2">{r.flags.map((f, i) => <Pill key={i} className="bg-white border border-line text-stone-700 py-1">{f}</Pill>)}</div></section>}
+      <p className="text-xs text-stone-500">Checked {ago(m.scored_at)} · <button className="underline" onClick={onScore} disabled={!!busy}>{busy === 'score' ? 'checking…' : 'check again'}</button></p>
+    </div>
+  );
+}
+function Warnings({ kit }) {
+  if (!(kit.warnings || []).length) return <div className="rounded-2xl bg-white border border-line p-3 text-[13px] text-stone-600 flex gap-2"><Icon name="check" className="w-4 h-4 text-[#3f8f2b] mt-0.5 shrink-0" />Every number matches your vault. Still read it once before you send it.</div>;
+  return <div className="rounded-2xl bg-[#fbe4e1] border border-[#f1c3bc] p-4 text-sm text-[#7a2216]"><p className="font-semibold flex items-center gap-1.5"><Icon name="alert" />Check before sending</p><ul className="list-disc ml-5 mt-1">{kit.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>;
+}
+function ResumePaper({ kit, editing, setKit }) {
+  const c = DB.prefs.contact; const upd = (fn) => { const k = JSON.parse(JSON.stringify(kit)); fn(k); setKit(k); };
+  const E = ({ value, onChange }) => editing ? <textarea defaultValue={value} onBlur={e => onChange(e.target.value)} rows={Math.max(1, Math.ceil((value || '').length / 95))} className="w-full bg-amber-50/60 border border-amber-200 rounded px-1 outline-none" /> : <span>{value}</span>;
+  const H = ({ children }) => <h4 className="text-[11px] font-bold tracking-[.12em] uppercase border-b border-stone-300 pb-1 mt-5 mb-2">{children}</h4>;
+  return (
+    <div className="bg-white paper rounded-sm px-8 sm:px-12 py-10 text-[12.5px] leading-[1.5] text-stone-800" style={{ fontFamily: 'Calibri, Carlito, Inter, sans-serif' }}>
+      <div className="text-[22px] font-bold tracking-wide text-ink">{(c.name || 'Your Name').toUpperCase()}</div>
+      <div className="text-[13.5px] text-stone-700">{kit.headline}</div><div className="text-[11.5px] text-stone-500 mt-0.5">{contactLine(c)}</div>
+      {kit.summary && <><H>Summary</H><p><E value={kit.summary} onChange={v => upd(k => k.summary = v)} /></p></>}
+      <H>Experience</H>
+      {kit.experience.map((e, i) => <div key={i} className="mt-3 first:mt-0"><div className="font-semibold text-ink">{e.title}</div><div className="flex text-stone-500 text-[12px]"><span>{e.company}{e.location ? ' — ' + e.location : ''}</span><span className="ml-auto pl-3 whitespace-nowrap">{e.dates}</span></div><ul className="list-disc ml-5 mt-1 space-y-0.5">{e.bullets.map((b, j) => <li key={j}>{b}</li>)}</ul></div>)}
+      {kit.extra_sections.map((s, i) => <div key={i}><H>{s.heading}</H>{s.lines.map((l, j) => <p key={j} className="mb-1">{l}</p>)}</div>)}
+      {kit.skills.length > 0 && <><H>Skills</H>{kit.skills.map((s, i) => <p key={i} className="mb-1"><b className="text-ink">{s.group}: </b>{s.items}</p>)}</>}
+      {kit.education.length > 0 && <><H>Education</H>{kit.education.map((l, i) => <p key={i}>{l}</p>)}</>}
+      {kit.certifications.length > 0 && <><H>Certifications</H>{kit.certifications.map((l, i) => <p key={i} className="mb-1">{l}</p>)}</>}
+    </div>
+  );
+}
+function ResumeTab({ job, kit: saved, onSave, onRegen, busy }) {
+  const [editing, setEditing] = useState(false); const [kit, setKit] = useState(saved); const ref = useRef(); useEffect(() => setKit(saved), [saved]);
+  const c = DB.prefs.contact; const base = slug(c.name || 'Resume') + '_Resume_' + slug(job.company.split(' · ')[0]);
+  return (
+    <div className="space-y-4 fade-in">
+      <div className="flex flex-wrap gap-2 items-center">
+        <Btn kind="primary" onClick={() => downloadDocx(resumeXml(kit, c), base + '.docx')}><Icon name="download" />Word (.docx)</Btn>
+        <Btn onClick={() => printHtml(base, ref.current.innerHTML)}><Icon name="print" />Save as PDF</Btn>
+        {editing ? <Btn kind="lime" onClick={() => { onSave(kit); setEditing(false); }}>Save edits</Btn> : <Btn onClick={() => setEditing(true)}><Icon name="edit" />Edit summary</Btn>}
+        <Btn kind="ghost" className="ml-auto" onClick={onRegen} disabled={!!busy}>{busy === 'kit' ? <Spinner /> : 'Rewrite'}</Btn>
+      </div>
+      <Warnings kit={kit} />
+      {(kit.fixed || []).length > 0 && <details className="rounded-2xl bg-white border border-line p-4 text-[13px]"><summary className="cursor-pointer list-none font-medium">The fact-check removed {kit.fixed.length} unsupported claim{kit.fixed.length > 1 ? 's' : ''} before you saw this</summary><ul className="mt-2 list-disc ml-5 text-stone-600">{kit.fixed.map((f, i) => <li key={i}>“{f}”</li>)}</ul></details>}
+      {(kit.changes || []).length > 0 && <details className="rounded-2xl bg-white border border-line p-4" open><summary className="text-sm font-semibold cursor-pointer list-none">What was tailored for this job</summary><ul className="mt-2 space-y-1 text-[13px] text-stone-700 list-disc ml-5">{kit.changes.map((x, i) => <li key={i}>{x}</li>)}</ul></details>}
+      <div ref={ref}><ResumePaper kit={kit} editing={editing} setKit={setKit} /></div>
+    </div>
+  );
+}
+function LetterTab({ job, m, kit: saved, onSave, say }) {
+  const [editing, setEditing] = useState(false); const [kit, setKit] = useState(saved); const ref = useRef(); useEffect(() => setKit(saved), [saved]);
+  const [line, setLine] = useState(m.my_line || ''); const [busy, setBusy] = useState(''); 
+  const rewrite = async () => {
+    m.my_line = line.trim(); commit(); setBusy('Starting');
+    try { const r = await writeLetter(job, m.my_line, setBusy); const k = { ...m.kit, cover_letter: r.cover_letter, fixed: r.fixed.length ? r.fixed : m.kit.fixed, edited: false }; k.warnings = truthCheck(job, k); m.kit = k; commit(); say('Letter rewritten around your line'); }
+    catch (e) { say(e.message); }
+    setBusy('');
+  };
+  const c = DB.prefs.contact; const cl = kit.cover_letter; const plain = [cl.greeting, ...cl.paragraphs, cl.closing, c.name].join('\n\n');
+  const base = slug(c.name || 'Cover') + '_Cover-Letter_' + slug(job.company.split(' · ')[0]);
+  const setP = (i, v) => { const k = JSON.parse(JSON.stringify(kit)); k.cover_letter.paragraphs[i] = v; setKit(k); };
+  const copy = () => { const el = document.createElement('textarea'); el.value = plain; document.body.appendChild(el); el.select(); try { document.execCommand('copy'); } catch (e) {} el.remove(); say('Copied. Paste it into the application form.'); };
+  return (
+    <div className="space-y-4 fade-in">
+      <div className="flex flex-wrap gap-2 items-center">
+        <Btn kind="primary" onClick={() => downloadDocx(letterXml(kit, c, job), base + '.docx')}><Icon name="download" />Word (.docx)</Btn>
+        <Btn onClick={() => printHtml(base, ref.current.innerHTML)}><Icon name="print" />Save as PDF</Btn>
+        <Btn onClick={copy}><Icon name="copy" />Copy text</Btn>
+        {editing ? <Btn kind="lime" onClick={() => { onSave(kit); setEditing(false); }}>Save edits</Btn> : <Btn onClick={() => setEditing(true)}><Icon name="edit" />Edit</Btn>}
+        <span className="ml-auto text-xs text-stone-500">{cl.paragraphs.join(' ').split(/\s+/).filter(Boolean).length} words</span>
+      </div>
+      <div className="rounded-2xl bg-white border border-line p-4">
+        <p className="text-sm font-semibold">Your line</p>
+        <p className="text-[13px] text-stone-500 mt-0.5 mb-2">One or two sentences in your own words (why this job, a detail only you know). It goes into the letter exactly as you write it.</p>
+        <textarea className={inputCls + ' h-20 text-[13px]'} value={line} onChange={e => setLine(e.target.value)} placeholder="e.g. I've used Prime Video's rent-or-buy flow more times than I can count, and I have opinions about it." />
+        <div className="flex items-center gap-2 mt-2"><Btn kind="primary" onClick={rewrite} disabled={!!busy}>{busy ? <><Spinner />{busy}…</> : 'Rewrite letter with my line'}</Btn>{m.my_line && !busy && <span className="text-xs text-stone-500">Last used: “{m.my_line.slice(0, 60)}{m.my_line.length > 60 ? '…' : ''}”</span>}</div>
+      </div>
+      <Warnings kit={kit} />
+      <div ref={ref}><div className="bg-white paper rounded-sm px-8 sm:px-14 py-12 text-[13.5px] leading-[1.65] text-stone-800" style={{ fontFamily: 'Calibri, Carlito, Inter, sans-serif' }}>
+        <div className="text-[18px] font-bold text-ink">{c.name}</div><div className="text-[11.5px] text-stone-500">{contactLine(c)}</div>
+        <p className="mt-8">{new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p><p className="mt-4 font-semibold">{job.company.split(' · ')[0]} · {job.title}</p><p className="mt-5">{cl.greeting}</p>
+        {cl.paragraphs.map((p, i) => editing ? <textarea key={i} defaultValue={p} onBlur={e => setP(i, e.target.value)} rows={Math.ceil(p.length / 85) + 1} className="w-full mt-3 bg-amber-50/60 border border-amber-200 rounded px-1.5 outline-none" /> : <p key={i} className="mt-3">{p}</p>)}
+        <p className="mt-5">{cl.closing}</p><p className="mt-1">{c.name}</p>
+      </div></div>
+    </div>
+  );
+}
+
+function Tracker({ open }) {
+  const db = useDB(); const cols = [['saved', 'Saved'], ['applied', 'Applied'], ['interview', 'Interview'], ['offer', 'Offer'], ['closed', 'Closed']];
+  const items = Object.values(db.jobs).map(j => ({ ...j, ...(db.matches[j.id] || {}) }));
+  return (
+    <div className="fade-in"><section className="pt-8 pb-6"><h1 className="font-serif text-[44px] leading-[1.05]">Your applications</h1><p className="text-sm text-stone-500 mt-1">Hit Apply on a job and Shortlist asks whether to mark it applied.</p></section>
+      <div className="grid grid-flow-col auto-cols-[minmax(240px,1fr)] gap-3 overflow-x-auto scroll-thin pb-4">{cols.map(([k, l]) => { const its = items.filter(m => m.status === k); return (
+        <div key={k} className="bg-[#efede7] rounded-2xl p-2.5 min-h-[300px]"><div className="flex items-center px-1.5 pt-1 pb-2.5"><span className="text-sm font-semibold">{l}</span><span className="ml-2 text-xs text-stone-500">{its.length}</span></div>
+          <div className="space-y-2">{its.map(m => <div key={m.id} className="bg-white rounded-xl border border-line p-3"><button onClick={() => open(m.id)} className="text-left w-full"><div className="flex gap-2 items-start"><span className={'text-xs font-semibold tabular-nums rounded-md px-1.5 py-0.5 ' + tone(m.score).bg + ' ' + tone(m.score).text}>{m.score ?? '–'}</span><span className="text-sm font-medium leading-snug hover:underline">{m.title}</span></div><p className="text-xs text-stone-500 mt-1">{m.company.split(' · ')[0]}</p></button>
+            <select value={m.status} onChange={e => { DB.matches[m.id].status = e.target.value; commit(); }} className="mt-2 w-full h-8 rounded-lg border border-line bg-paper text-xs px-2">{STATUSES.map(([s, sl]) => <option key={s} value={s}>{sl}</option>)}</select></div>)}
+            {its.length === 0 && <p className="text-xs text-stone-400 px-1.5">Nothing here yet</p>}</div></div>); })}</div></div>
+  );
+}
+
+function Profile({ say }) {
+  const db = useDB(); const p = db.prefs; const fileRef = useRef(); const [busy, setBusy] = useState(false);
+  const setPref = (k, v) => { DB.prefs[k] = v; commit(); }; const setContact = (k, v) => { DB.prefs.contact[k] = v; commit(); };
+  const changeFilters = (k, v) => { setPref(k, v); for (const [id, m] of Object.entries(DB.matches)) if (m.prefilter !== 'pass' && m.status === 'new') delete DB.matches[id]; commit(); };
+  const [readErr, setReadErr] = useState('');
+  const reread = async () => { setBusy(true); setReadErr(''); try { await readResume(true); say('Resume read'); } catch (e) { setReadErr(e.message); } setBusy(false); };
+  useEffect(() => { // read automatically a moment after the resume changes
+    if (!db.vault.trim() || (db.struct && db.struct.hash === hashId(db.vault))) return;
+    const t = setTimeout(() => { readResumeLocal(); }, 700); return () => clearTimeout(t);
+  }, [db.vault]);
+  const st = db.struct; const fresh = st && st.hash === hashId(db.vault);
+  return (
+    <div className="fade-in max-w-3xl">
+      <section className="pt-8 pb-6"><h1 className="font-serif text-[44px] leading-[1.05]">Your career vault</h1><p className="text-sm text-stone-500 mt-1">The single source of truth. Matches and kits only use what's written here. Everything saves in this browser automatically.</p></section>
+      <div className="space-y-5">
+        <Card title="Resume" desc="Import your most complete resume (.docx) or paste it.">
+          <div className="flex gap-2 mb-2"><Btn onClick={() => fileRef.current.click()}><Icon name="download" className="w-4 h-4 rotate-180" />Import .docx</Btn>
+            {SEED && SEED.vault && db.vault !== SEED.vault && <Btn kind="ghost" onClick={() => { DB.vault = SEED.vault; if (!DB.extra.trim()) DB.extra = SEED.extra || ''; commit(); say('Built-in resume restored'); }}>Use my built-in resume</Btn>}
+            <input ref={fileRef} type="file" accept=".docx" className="hidden" onChange={async e => { const f = e.target.files[0]; if (!f) return; try { DB.vault = await docxToText(f); commit(); say('Resume imported'); } catch (x) { say(x.message); } e.target.value = ''; }} /></div>
+          <textarea className={inputCls + ' h-72 font-mono text-[12.5px] leading-relaxed'} value={db.vault} onChange={e => { DB.vault = e.target.value; commit(); }} placeholder="Paste your resume text here" />
+        </Card>
+        {db.vault.trim() && <Card title="How Shortlist reads your resume" desc="Tailored resumes are assembled from these exact pieces, in your words. Every role always stays; only the order of bullets and skills changes per job.">
+          {readErr && <p className="text-sm text-red-700 mb-3">Couldn't read it: {readErr}</p>}
+          {!st ? <p className="text-sm text-stone-500">Reading… If nothing appears, press the button below.</p> : <>
+            {!fresh && <p className="text-sm text-amber-800 mb-3">Your resume changed since it was read. Read it again.</p>}
+            <p className="text-sm"><b>{st.name}</b>{st.headline_parts.length ? ' · ' + st.headline_parts.join(' · ') : ''}<span className="text-xs text-stone-400"> · read {st.how === 'AI' ? 'with Gemini' : 'instantly on this device'}</span></p>
+            <ul className="mt-3 divide-y divide-line text-sm">{st.roles.map((r, i) => <li key={i} className="py-2 flex gap-3"><span className="flex-1 min-w-0"><span className="font-medium">{r.title}</span><span className="text-stone-500"> · {r.company}</span></span><span className="text-stone-500 whitespace-nowrap">{r.dates}</span><span className="text-xs text-stone-500 w-16 text-right">{r.bullets.length} bullet{r.bullets.length === 1 ? '' : 's'}</span></li>)}</ul>
+            {st.warnings.length ? <div className="mt-3 rounded-xl bg-amber-50 border border-amber-200 p-3 text-[13px] text-amber-900"><p className="font-medium mb-1">Check these, then read again:</p><ul className="list-disc ml-5">{st.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div> : <p className="mt-3 text-[13px] text-[#2d6b1e] flex items-center gap-1.5"><Icon name="check" />Every line of your resume was picked up word for word.</p>}
+          </>}
+          <Btn className="mt-3" onClick={reread} disabled={busy}>{busy ? <Spinner /> : st ? 'Read it again' : 'Read my resume'}</Btn>
+        </Card>}
+        <Card title="Extra true facts" desc="Things that are true but didn't fit on the resume. Only what you'd happily defend in an interview."><textarea className={inputCls + ' h-40 text-[13px]'} value={db.extra} onChange={e => { DB.extra = e.target.value; commit(); }} /></Card>
+        <Card title="Contact details" desc="Printed at the top of every resume and cover letter.">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Full name" hint={p.contact.name.trim().split(/\s+/).length < 2 ? 'Add your last name.' : null}><input className={inputCls} value={p.contact.name} onChange={e => setContact('name', e.target.value)} /></Field>
+            <Field label="Email"><input className={inputCls} value={p.contact.email} onChange={e => setContact('email', e.target.value)} /></Field>
+            <Field label="Phone"><input className={inputCls} value={p.contact.phone} onChange={e => setContact('phone', e.target.value)} /></Field>
+            <Field label="City"><input className={inputCls} value={p.contact.city} onChange={e => setContact('city', e.target.value)} /></Field>
+          </div>
+          <div className="mt-3"><Field label="Links" hint="Comma separated"><input className={inputCls} value={p.contact.links} onChange={e => setContact('links', e.target.value)} /></Field></div>
+        </Card>
+        <Card title="What to look for">
+          <div className="grid sm:grid-cols-2 gap-4"><Field label={'Show jobs at or above ' + p.min_score + '%'}><input type="range" min="50" max="90" step="5" value={p.min_score} onChange={e => setPref('min_score', +e.target.value)} className="w-full accent-[#14161a]" /></Field>
+            <label className="flex items-center gap-2 text-sm mt-5"><input type="checkbox" checked={p.allow_remote} onChange={e => changeFilters('allow_remote', e.target.checked)} className="w-4 h-4 accent-[#14161a]" />Include remote roles</label></div>
+          <div className="mt-4"><span className="block text-[13px] font-medium text-stone-700 mb-2">Studios and companies</span><div className="flex flex-wrap gap-2">{Object.entries(STUDIOS).map(([k, l]) => <button key={k} onClick={() => changeFilters('sources', { ...p.sources, [k]: !p.sources[k] })} className={'h-8 px-3 rounded-full text-sm border ' + (p.sources[k] ? 'bg-ink text-white border-ink' : 'bg-white border-line text-stone-500')}>{l}</button>)}</div></div>
+          <div className="grid sm:grid-cols-3 gap-3 mt-4">
+            <Field label="Title keywords" hint="One per line"><textarea className={inputCls + ' h-40 text-[12.5px]'} value={p.include} onChange={e => changeFilters('include', e.target.value)} /></Field>
+            <Field label="Skip titles with" hint="One per line"><textarea className={inputCls + ' h-40 text-[12.5px]'} value={p.exclude} onChange={e => changeFilters('exclude', e.target.value)} /></Field>
+            <Field label="Locations" hint="“remote” allows remote roles"><textarea className={inputCls + ' h-40 text-[12.5px]'} value={p.locations} onChange={e => changeFilters('locations', e.target.value)} /></Field>
+          </div>
+          <div className="mt-4"><Field label="Cover letter voice"><input className={inputCls} value={p.tone} onChange={e => setPref('tone', e.target.value)} /></Field></div>
+          <div className="mt-4"><Field label="Write like me" hint="Paste a few things you wrote yourself (an email, a LinkedIn post, captions). Letters copy your rhythm and word choices, not the content."><textarea className={inputCls + ' h-32 text-[12.5px]'} value={p.voice_sample || ''} onChange={e => setPref('voice_sample', e.target.value)} /></Field></div>
+          <div className="mt-4"><Field label="Where you live" hint="Mentioned once in letters for Los Angeles jobs, like “I'm based in Los Angeles (I live in Burbank)”. Leave empty to skip."><input className={inputCls + ' sm:w-72'} value={p.home_area || ''} onChange={e => setPref('home_area', e.target.value)} placeholder="e.g. Burbank" /></Field></div>
+          <div className="mt-4"><Field label="Ratings you trust" hint="Past jobs with the match % you agree with, one per line with a short reason. The AI keeps its scores on the same scale."><textarea className={inputCls + ' h-32 text-[12.5px]'} value={p.anchors || ''} onChange={e => setPref('anchors', e.target.value)} placeholder="e.g. Amazon, Creative Director (needs 4+ years leading a creative team): 40%" /></Field></div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function Search({ running, log, find, stop, say }) {
+  const db = useDB(); const logRef = useRef(); const importRef = useRef();
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
+  const shownLog = log || (db.runs[0] ? db.runs[0].log.join('\n') : '');
+  const backup = () => { const blob = new Blob([JSON.stringify(DB)], { type: 'application/json' }); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'shortlist-backup-' + today() + '.json'; a.click(); };
+  const restore = async (f) => { try { const d = JSON.parse(await f.text()); if (!d.jobs || !d.prefs) throw new Error('Not a Shortlist backup'); Object.keys(DB).forEach(k => delete DB[k]); Object.assign(DB, emptyDB(), d); commit(); say('Backup restored'); } catch (e) { say(e.message); } };
+  return (
+    <div className="fade-in">
+      <section className="pt-8 pb-6 flex flex-wrap items-end gap-4">
+        <div><h1 className="font-serif text-[44px] leading-[1.05]">Search</h1><p className="text-sm text-stone-500 mt-1 max-w-xl">Shortlist checks the big studios' career sites and other top companies' job boards from this page, then gives new design roles an AI check with Gemini. It runs while this page is open; press Find jobs whenever you come back.</p></div>
+        <div className="ml-auto flex gap-2">
+          {running && <Btn onClick={stop}>Stop</Btn>}
+          {!running && <Btn onClick={() => { let n = 0; for (const m of Object.values(DB.matches)) if (m.score != null && !['applied', 'interview', 'offer', 'closed'].includes(m.status)) { m.score = null; m.result = null; n++; } commit(); find({ skipCollect: true }); say('Re-checking ' + n + ' jobs with the latest scoring'); }}>Re-check scores</Btn>}
+          <Btn kind="primary" className="h-10 px-5" onClick={() => find()} disabled={running}>{running ? <><Spinner />Searching…</> : <><Icon name="search" />Find jobs</>}</Btn>
+        </div>
+      </section>
+      {shownLog && <pre ref={logRef} className="bg-ink text-[#d9f7a6] text-[12px] leading-relaxed rounded-2xl p-4 max-h-80 overflow-auto scroll-thin mb-6 whitespace-pre-wrap">{shownLog}</pre>}
+      <div className="bg-white rounded-3xl border border-line overflow-hidden"><div className="px-5 py-4 font-semibold">Studios and companies</div>
+        <div className="divide-y divide-line">{Object.entries(STUDIOS).map(([k, l]) => { const s = db.sources[k] || {}; const bad = s.err && (!s.ok || s.err > s.ok); const n = Object.values(db.jobs).filter(j => j.source === k && j.active).length; return (
+          <div key={k} className="px-5 py-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"><span className={'w-2 h-2 rounded-full ' + (!db.prefs.sources[k] ? 'bg-stone-300' : bad ? 'bg-red-500' : s.ok ? 'bg-[#7fb321]' : 'bg-stone-300')} /><span className="font-medium w-48">{l}</span><span className="text-stone-600 w-40">{n} open design roles</span><span className="text-stone-500 text-xs flex-1 min-w-[200px]">{!db.prefs.sources[k] ? 'Turned off in Profile' : bad ? 'Last try failed: ' + s.error : s.ok ? 'OK · ' + ago(s.ok) + ' · ' + s.fresh + ' new' : 'Not checked yet'}</span></div>); })}</div></div>
+      <div className="grid md:grid-cols-2 gap-4 mt-6">
+        <Card title="AI" desc="Inside Gemini this uses Gemini itself, with no key and no credits. Outside Gemini, add a Google AI Studio key here.">
+          <Field label="AI checks per search" hint="Each new job takes one AI check. Lower it if Gemini starts saying it's busy."><input type="number" min="1" max="60" className={inputCls + ' w-28'} value={db.prefs.checks_per_search} onChange={e => { DB.prefs.checks_per_search = +e.target.value || 15; commit(); }} /></Field>
+          <div className="mt-3"><Field label="Gemini API key (only outside Gemini)"><input type="password" className={inputCls} value={db.prefs.api_key} onChange={e => { DB.prefs.api_key = e.target.value; commit(); }} placeholder="Leave empty inside Gemini" /></Field></div>
+          <p className="text-xs text-stone-500 mt-3">{db.aiCalls[today()] || 0} AI calls today{goodModel ? ' · using ' + goodModel : ''}.</p>
+        </Card>
+        <Card title="Your data" desc="Everything lives in this browser. Download a backup to move it to another device or browser.">
+          <div className="flex flex-wrap gap-2"><Btn onClick={backup}><Icon name="download" />Download backup</Btn><Btn onClick={() => importRef.current.click()}>Restore backup</Btn><input ref={importRef} type="file" accept=".json" className="hidden" onChange={e => e.target.files[0] && restore(e.target.files[0])} /></div>
+          <p className="text-xs text-stone-500 mt-3">{Object.keys(db.jobs).length} jobs saved · {(JSON.stringify(db).length / 1e6).toFixed(1)} MB of about 5 MB</p>
+        </Card>
+      </div>
+      {db.runs.length > 0 && <><h2 className="font-semibold mt-8 mb-3">Recent searches</h2><div className="space-y-2">{db.runs.slice(0, 8).map((r, i) => <details key={i} className="bg-white rounded-2xl border border-line"><summary className="px-5 py-3 cursor-pointer text-sm flex flex-wrap gap-x-4 list-none"><span className="font-medium">{new Date(r.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span><span className="text-stone-600">{r.found} found · {r.new} new · {r.checked} checked{r.errors ? ' · ' + r.errors + ' studio errors' : ''}</span></summary><pre className="px-5 pb-4 text-[12px] text-stone-600 whitespace-pre-wrap">{r.log.join('\n')}</pre></details>)}</div></>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
